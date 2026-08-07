@@ -33,6 +33,18 @@ import {
   RotateCcw,
   StickyNote,
   Camera,
+  Sparkles,
+  Zap,
+  Footprints,
+  Bath,
+  Salad,
+  Wallet,
+  GraduationCap,
+  Bed,
+  Guitar,
+  PawPrint,
+  Gamepad2,
+  Palette,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -131,6 +143,8 @@ const PERIODS = [
 const COLORS = [
   "#5FCB6C", "#F2C94C", "#EE6C4D", "#E5484D", "#4EA8DE",
   "#9B5DE5", "#F15BB5", "#00BBF9", "#43AA8B", "#F3722C",
+  "#FF9F1C", "#118AB2", "#06D6A0", "#EF476F", "#8338EC",
+  "#3A86FF", "#FFBE0B", "#FB5607",
 ];
 
 const ICONS = [
@@ -150,6 +164,18 @@ const ICONS = [
   { key: "smile", Icon: Smile },
   { key: "leaf", Icon: Leaf },
   { key: "pen", Icon: PenLine },
+  { key: "sparkles", Icon: Sparkles },
+  { key: "zap", Icon: Zap },
+  { key: "footprints", Icon: Footprints },
+  { key: "bath", Icon: Bath },
+  { key: "salad", Icon: Salad },
+  { key: "wallet", Icon: Wallet },
+  { key: "graduation", Icon: GraduationCap },
+  { key: "bed", Icon: Bed },
+  { key: "guitar", Icon: Guitar },
+  { key: "paw", Icon: PawPrint },
+  { key: "gamepad", Icon: Gamepad2 },
+  { key: "palette", Icon: Palette },
 ];
 
 const WEEKDAYS = [
@@ -181,6 +207,10 @@ function isScheduledOn(habit, dateStr) {
 // (the day selection only affects streak math), but a "once" habit is truly one-off
 // and should only ever appear on its single designated date.
 function isVisibleOn(habit, dateStr) {
+  // A habit marked completed stays visible through the day it was completed
+  // on, then disappears starting the next day — it's done, so it shouldn't
+  // keep cluttering the daily list.
+  if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
   if (habit.frequency?.type === "once") return isScheduledOn(habit, dateStr);
   return true;
 }
@@ -204,7 +234,13 @@ function getMilestoneThresholds(totalMilestones) {
   if (totalMilestones < 8) {
     return ACHIEVEMENT_LEVELS.map((_, i) => Math.max(1, Math.ceil(((i + 1) * totalMilestones) / 8)));
   }
-  return ACHIEVEMENT_LEVELS.map((_, i) => i + 1);
+  // 8 or more milestones: spread the 8 trophy tiers evenly across the full
+  // milestone count instead of always maxing out at 8 done. E.g. 12
+  // milestones -> 12/8 = 1.5, rounded to 2 milestones per trophy, so the
+  // tiers land at 2, 4, 6, 8, 10, 12, 14, 16 (the last couple may end up
+  // out of reach if the count doesn't divide evenly — that's expected).
+  const perTrophy = Math.max(1, Math.round(totalMilestones / 8));
+  return ACHIEVEMENT_LEVELS.map((_, i) => (i + 1) * perTrophy);
 }
 
 function getEffectiveLevels(habit) {
@@ -552,6 +588,127 @@ function Heatmap({
   );
 }
 
+// Builds one {date, pct} point per day, starting from the earliest day we
+// have any signal for (first habit created, or first record on file —
+// whichever is earlier) through today. This feeds the continuous trend
+// graph, so it naturally grows as the user's history grows.
+function buildTrendSeries(habits, records, today) {
+  const candidateDates = [];
+  habits.forEach((h) => {
+    if (h.createdAt) candidateDates.push(fmt(new Date(h.createdAt)));
+  });
+  Object.keys(records).forEach((ds) => candidateDates.push(ds));
+
+  const todayDate = parseDate(today);
+  let startDate = todayDate;
+  if (candidateDates.length > 0) {
+    const earliest = candidateDates.reduce((min, ds) => (ds < min ? ds : min), candidateDates[0]);
+    const earliestDate = parseDate(earliest);
+    if (earliestDate < startDate) startDate = earliestDate;
+  } else {
+    // No data at all yet — still show a short recent window so the graph
+    // isn't a single empty point.
+    startDate = new Date(todayDate);
+    startDate.setDate(todayDate.getDate() - 13);
+  }
+
+  const series = [];
+  const cursor = new Date(startDate);
+  while (cursor <= todayDate) {
+    const ds = fmt(cursor);
+    const rec = records[ds];
+    let pct = null;
+    if (rec) {
+      let total = 0;
+      let done = 0;
+      Object.entries(rec).forEach(([hid, val]) => {
+        const hb = habits.find((h) => String(h.id) === String(hid));
+        if (!hb) return;
+        if (!isVisibleOn(hb, ds)) return;
+        total += hb.difficulty;
+        if (val) done += hb.difficulty;
+      });
+      pct = total === 0 ? null : Math.round((done / total) * 100);
+    }
+    series.push({ date: ds, pct });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return series;
+}
+
+// Continuous, horizontally-scrollable line + area graph of daily completion
+// percentage. Renders wide enough to fit one point per day and defaults its
+// scroll position to today (the right edge) — scrolling left reveals earlier
+// history, all the way back to the first tracked day.
+function TrendGraph({ series, todayDate }) {
+  const scrollRef = useRef(null);
+  const pxPerDay = 14;
+  const height = 160;
+  const width = Math.max(series.length * pxPerDay, 320);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }
+  }, [series.length]);
+
+  const points = series.map((pt, i) => {
+    const x = i * pxPerDay + pxPerDay / 2;
+    const p = pt.pct === null ? 0 : pt.pct;
+    const y = height - (p / 100) * (height - 16) - 8;
+    return { x, y, pt };
+  });
+
+  const linePath = points.map((pt, i) => `${i === 0 ? "M" : "L"} ${pt.x} ${pt.y}`).join(" ");
+  const areaPath =
+    points.length > 0
+      ? `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`
+      : "";
+
+  // Sparse date labels so they don't collide — roughly weekly.
+  const labelEvery = 7;
+
+  return (
+    <div ref={scrollRef} className="hide-scrollbar" style={{ overflowX: "auto", width: "100%" }}>
+      <svg width={width} height={height + 22} style={{ display: "block" }}>
+        <defs>
+          <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={ACCENT_GREEN} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={ACCENT_GREEN} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0, 25, 50, 75, 100].map((gridPct) => {
+          const y = height - (gridPct / 100) * (height - 16) - 8;
+          return <line key={gridPct} x1={0} y1={y} x2={width} y2={y} stroke="#1C1C19" strokeWidth={1} />;
+        })}
+        {areaPath && <path d={areaPath} fill="url(#trendFill)" />}
+        {linePath && <path d={linePath} fill="none" stroke={ACCENT_GREEN} strokeWidth={2} />}
+        {points.map((pt, i) => {
+          if (pt.pt.pct === null) return null;
+          const isToday = pt.pt.date === fmt(todayDate);
+          return <circle key={i} cx={pt.x} cy={pt.y} r={isToday ? 3.5 : 2} fill={isToday ? YELLOW : ACCENT_GREEN} />;
+        })}
+        {series.map((pt, i) => {
+          if (i % labelEvery !== 0 && i !== series.length - 1) return null;
+          const d = parseDate(pt.date);
+          return (
+            <text
+              key={pt.date}
+              x={i * pxPerDay + pxPerDay / 2}
+              y={height + 16}
+              textAnchor="middle"
+              fontSize="9"
+              fontFamily="'IBM Plex Mono', monospace"
+              fill="#6E6E6A"
+            >
+              {d.toLocaleDateString("default", { month: "short", day: "numeric" })}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 function buildFullMonthGrid(monthCursor) {
   const year = monthCursor.getFullYear();
@@ -603,7 +760,8 @@ export default function HabitTracker() {
   const [reminderDays, setReminderDays] = useState(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
   const [trackQuantity, setTrackQuantity] = useState(false);
   const [quantityLabel, setQuantityLabel] = useState("");
-  const [milestoneInputs, setMilestoneInputs] = useState([{ id: null, text: "" }]);
+  const [milestoneInputs, setMilestoneInputs] = useState([{ id: null, text: "", deadline: "" }]);
+  const lastRandomPickRef = useRef({ color: null, icon: null });
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
@@ -629,6 +787,10 @@ export default function HabitTracker() {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+
+  const [milestoneToast, setMilestoneToast] = useState(null); // { id, title, body } | null
+  const [showTrendGraph, setShowTrendGraph] = useState(false);
+  const [completeHabitConfirm, setCompleteHabitConfirm] = useState(null); // habit pending "mark completed" confirmation
 
   const pressRef = useRef({ timer: null, longPressed: false });
 
@@ -747,6 +909,74 @@ export default function HabitTracker() {
       console.error("Failed to save milestone completions:", e);
     }
   }
+
+  // ---- Milestone deadline reminders (10h and 4h before due) ----
+  // These fire while the app is open: a real browser Notification when
+  // permission has been granted, and always an in-app toast as a fallback
+  // (browser notifications can't be delivered once the tab is closed since
+  // there's no push server behind this app).
+  function notifyMilestoneDeadline(habit, milestone, hoursLabel) {
+    const title = `${hoursLabel} left`;
+    const body = `"${milestone.text}" (${habit.name}) is due soon.`;
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(title, { body });
+      } catch (e) {
+        console.error("Notification failed:", e);
+      }
+    }
+    setMilestoneToast({ id: Date.now() + Math.random(), title, body, color: habit.color });
+  }
+
+  useEffect(() => {
+    if (milestoneToast === null) return;
+    const t = setTimeout(() => setMilestoneToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [milestoneToast]);
+
+  useEffect(() => {
+    const TEN_HOURS_MS = 10 * 60 * 60 * 1000;
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+    const checkDeadlines = () => {
+      const now = Date.now();
+      let anyChanged = false;
+      const nextHabits = habits.map((h) => {
+        if (h.frequency?.type !== "milestone" || !h.milestones || h.milestones.length === 0) return h;
+        const doneMap = milestoneCompletions[h.id] || {};
+        let habitChanged = false;
+        const nextMilestones = h.milestones.map((m) => {
+          if (!m.deadline || doneMap[m.id]) return m;
+          const deadlineTime = new Date(m.deadline).getTime();
+          if (isNaN(deadlineTime)) return m;
+          const msLeft = deadlineTime - now;
+          let next = m;
+          if (!next.notified10h && msLeft <= TEN_HOURS_MS && msLeft > FOUR_HOURS_MS) {
+            notifyMilestoneDeadline(h, m, "10 hours");
+            next = { ...next, notified10h: true };
+            habitChanged = true;
+          }
+          if (!next.notified4h && msLeft <= FOUR_HOURS_MS && msLeft > 0) {
+            notifyMilestoneDeadline(h, m, "4 hours");
+            next = { ...next, notified4h: true };
+            habitChanged = true;
+          }
+          return next;
+        });
+        if (habitChanged) {
+          anyChanged = true;
+          return { ...h, milestones: nextMilestones };
+        }
+        return h;
+      });
+      if (anyChanged) persistHabits(nextHabits);
+    };
+
+    checkDeadlines();
+    const intervalId = setInterval(checkDeadlines, 60 * 1000);
+    return () => clearInterval(intervalId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits, milestoneCompletions]);
 
   function computeMilestoneCompletedCount(habit) {
     const done = milestoneCompletions[habit.id] || {};
@@ -875,13 +1105,32 @@ export default function HabitTracker() {
     persistRecords(newRecords);
   };
 
+  function pickRandomColorAndIcon() {
+    const prev = lastRandomPickRef.current;
+    let nextColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+    if (COLORS.length > 1) {
+      while (nextColor === prev.color) {
+        nextColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+      }
+    }
+    let nextIcon = ICONS[Math.floor(Math.random() * ICONS.length)].key;
+    if (ICONS.length > 1) {
+      while (nextIcon === prev.icon) {
+        nextIcon = ICONS[Math.floor(Math.random() * ICONS.length)].key;
+      }
+    }
+    lastRandomPickRef.current = { color: nextColor, icon: nextIcon };
+    return { color: nextColor, icon: nextIcon };
+  }
+
   function resetAddForm() {
     setEditingHabitId(null);
     setName("");
     setDescription("");
     setDifficulty(1);
-    setColor(DEFAULT_COLOR);
-    setIcon(DEFAULT_ICON);
+    const { color: randColor, icon: randIcon } = pickRandomColorAndIcon();
+    setColor(randColor);
+    setIcon(randIcon);
     setShowColorPicker(false);
     setShowIconPicker(false);
     setFrequencyType("everyday");
@@ -892,16 +1141,22 @@ export default function HabitTracker() {
     setReminderDays(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
     setTrackQuantity(false);
     setQuantityLabel("");
-    setMilestoneInputs([{ id: null, text: "" }]);
+    setMilestoneInputs([{ id: null, text: "", deadline: "" }]);
   }
 
   const toggleFrequencyDay = (key) => {
     setFrequencyDays((days) => (days.includes(key) ? days.filter((d) => d !== key) : [...days, key]));
   };
 
-  const addMilestoneInput = () => setMilestoneInputs((prev) => [...prev, { id: null, text: "" }]);
+  const addMilestoneInput = () => setMilestoneInputs((prev) => [...prev, { id: null, text: "", deadline: "" }]);
   const updateMilestoneInput = (idx, text) =>
     setMilestoneInputs((prev) => prev.map((m, i) => (i === idx ? { ...m, text } : m)));
+  const updateMilestoneDeadline = (idx, deadline) => {
+    setMilestoneInputs((prev) => prev.map((m, i) => (i === idx ? { ...m, deadline } : m)));
+    if (deadline && typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  };
   const removeMilestoneInput = (idx) => setMilestoneInputs((prev) => prev.filter((_, i) => i !== idx));
 
   const toggleReminderDay = (key) => {
@@ -921,11 +1176,27 @@ export default function HabitTracker() {
         : { type: "specific_days", days: frequencyDays };
     const reminder = { enabled: reminderEnabled, time: reminderTime, days: reminderDays };
     const quantityTracking = { enabled: trackQuantity && !!quantityLabel.trim(), label: quantityLabel.trim() };
+    const existingHabitForEdit = editingHabitId ? habits.find((h) => h.id === editingHabitId) : null;
     const milestones =
       frequencyType === "milestone"
         ? milestoneInputs
             .filter((m) => m.text.trim())
-            .map((m, i) => ({ id: m.id ?? Date.now() + i, text: m.text.trim() }))
+            .map((m, i) => {
+              const id = m.id ?? Date.now() + i;
+              const deadline = m.deadline || null;
+              const prevMilestone = existingHabitForEdit?.milestones?.find((pm) => pm.id === id);
+              // Only carry over "already notified" flags if this milestone's
+              // deadline hasn't changed — a new/edited deadline should be
+              // able to trigger fresh reminders.
+              const deadlineUnchanged = !!prevMilestone && (prevMilestone.deadline || null) === deadline;
+              return {
+                id,
+                text: m.text.trim(),
+                deadline,
+                notified10h: deadlineUnchanged ? !!prevMilestone.notified10h : false,
+                notified4h: deadlineUnchanged ? !!prevMilestone.notified4h : false,
+              };
+            })
         : [];
 
     if (editingHabitId) {
@@ -1008,8 +1279,8 @@ export default function HabitTracker() {
     setQuantityLabel(habit.quantityTracking?.label || "");
     setMilestoneInputs(
       habit.milestones && habit.milestones.length > 0
-        ? habit.milestones.map((m) => ({ id: m.id, text: m.text }))
-        : [{ id: null, text: "" }]
+        ? habit.milestones.map((m) => ({ id: m.id, text: m.text, deadline: m.deadline || "" }))
+        : [{ id: null, text: "", deadline: "" }]
     );
     setDetailHabit(null);
     setShowAddModal(true);
@@ -1067,6 +1338,21 @@ export default function HabitTracker() {
     setDetailMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
   };
   const closeDetail = () => setDetailHabit(null);
+
+  const openCompleteHabitConfirm = (habit) => setCompleteHabitConfirm(habit);
+  const cancelCompleteHabit = () => setCompleteHabitConfirm(null);
+  const confirmCompleteHabit = () => {
+    const habit = completeHabitConfirm;
+    if (!habit) return;
+    const newHabits = habits.map((h) => (h.id === habit.id ? { ...h, completed: true, completedDate: today } : h));
+    persistHabits(newHabits);
+    setCompleteHabitConfirm(null);
+    setDetailHabit(null);
+  };
+  const reopenHabit = (habit) => {
+    const newHabits = habits.map((h) => (h.id === habit.id ? { ...h, completed: false, completedDate: null } : h));
+    persistHabits(newHabits);
+  };
 
   function computeCurrentStreak(habit) {
     const isDone = (ds) => {
@@ -1584,7 +1870,43 @@ export default function HabitTracker() {
         @media (max-width: 480px) {
           .detail-zoom { zoom: 0.92; }
         }
+        @keyframes toastSlideIn {
+          0% { transform: translate(-50%, -12px); opacity: 0; }
+          100% { transform: translate(-50%, 0); opacity: 1; }
+        }
+        .milestone-toast { animation: toastSlideIn 0.25s ease-out; }
       `}</style>
+
+      {milestoneToast && (
+        <div
+          className="milestone-toast"
+          onClick={() => setMilestoneToast(null)}
+          style={{
+            position: "fixed",
+            top: "16px",
+            left: "50%",
+            zIndex: 80,
+            width: "calc(100% - 32px)",
+            maxWidth: "380px",
+            background: "#0D0D0D",
+            border: `1px solid ${milestoneToast.color || ACCENT_GREEN}`,
+            borderRadius: "12px",
+            padding: "12px 14px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            cursor: "pointer",
+          }}
+        >
+          <div className="flex items-center gap-2 mb-0.5">
+            <Flame size={13} color={milestoneToast.color || ACCENT_GREEN} />
+            <span className="text-xs" style={{ color: milestoneToast.color || ACCENT_GREEN, fontWeight: 700 }}>
+              {milestoneToast.title}
+            </span>
+          </div>
+          <div className="text-xs" style={{ color: "#C9C9C4" }}>
+            {milestoneToast.body}
+          </div>
+        </div>
+      )}
 
       <div className="max-w-xl mx-auto px-5 py-10" style={{ paddingBottom: "110px" }}>
         {/* Header */}
@@ -1656,9 +1978,19 @@ export default function HabitTracker() {
         {/* Average completion */}
         <div className="rounded-lg p-5 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
           <div className="flex items-center justify-between mb-4">
-            <span className="text-xs mono" style={{ color: "#8A8A85" }}>
-              AVERAGE COMPLETION
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs mono" style={{ color: "#8A8A85" }}>
+                AVERAGE COMPLETION
+              </span>
+              <button
+                onClick={() => setShowTrendGraph(true)}
+                aria-label="View daily completion trend graph"
+                className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
+                style={{ background: "transparent", border: "1px solid #262622", color: "#8A8A85" }}
+              >
+                <BarChart3 size={12} />
+              </button>
+            </div>
             <div className="flex gap-1">
               {PERIODS.map((p) => (
                 <button
@@ -2281,27 +2613,49 @@ export default function HabitTracker() {
               {frequencyType === "milestone" && (
                 <div className="pl-8 mt-2 flex flex-col gap-2">
                   <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
-                    Add as many milestones as you want for this habit.
+                    Add as many milestones as you want for this habit. Deadlines are optional — set one and we'll remind you 10 hours and 4 hours before it's due.
                   </div>
                   {milestoneInputs.map((m, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <input
-                        value={m.text}
-                        onChange={(e) => updateMilestoneInput(idx, e.target.value)}
-                        placeholder={`Milestone ${idx + 1}`}
-                        className="flex-1 rounded-lg px-3 py-2 text-sm"
-                        style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
-                      />
-                      {milestoneInputs.length > 1 && (
-                        <button
-                          onClick={() => removeMilestoneInput(idx)}
-                          aria-label="Remove milestone"
-                          className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
-                          style={{ color: "#8A8A85" }}
-                        >
-                          <X size={15} />
-                        </button>
-                      )}
+                    <div key={idx} className="flex flex-col gap-1.5">
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={m.text}
+                          onChange={(e) => updateMilestoneInput(idx, e.target.value)}
+                          placeholder={`Milestone ${idx + 1}`}
+                          className="flex-1 rounded-lg px-3 py-2 text-sm"
+                          style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                        />
+                        {milestoneInputs.length > 1 && (
+                          <button
+                            onClick={() => removeMilestoneInput(idx)}
+                            aria-label="Remove milestone"
+                            className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+                            style={{ color: "#8A8A85" }}
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 pl-1">
+                        <Calendar size={13} color="#6E6E6A" style={{ flexShrink: 0 }} />
+                        <input
+                          type="datetime-local"
+                          value={m.deadline || ""}
+                          onChange={(e) => updateMilestoneDeadline(idx, e.target.value)}
+                          className="flex-1 rounded-lg px-3 py-1.5 text-xs"
+                          style={{ background: "#151513", border: "1px solid #262622", color: m.deadline ? "#EDEDEA" : "#6E6E6A" }}
+                        />
+                        {m.deadline && (
+                          <button
+                            onClick={() => updateMilestoneDeadline(idx, "")}
+                            aria-label="Clear deadline"
+                            className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
+                            style={{ color: "#6E6E6A" }}
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                   <button
@@ -2618,6 +2972,39 @@ export default function HabitTracker() {
                       </div>
                     )}
 
+                    {h.completed ? (
+                      <div
+                        className="rounded-lg py-3 px-4 flex items-center justify-between gap-2 mb-1"
+                        style={{ background: hexToRgba(h.color, 0.16), border: `1px solid ${h.color}` }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Check size={16} color={h.color} strokeWidth={3} />
+                          <span className="text-sm" style={{ color: h.color, fontWeight: 600 }}>
+                            Completed
+                            {h.completedDate
+                              ? ` ${parseDate(h.completedDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}`
+                              : ""}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => reopenHabit(h)}
+                          className="text-xs shrink-0"
+                          style={{ color: "#8A8A85", textDecoration: "underline" }}
+                        >
+                          Reopen
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => openCompleteHabitConfirm(h)}
+                        className="rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm mb-1"
+                        style={{ background: h.color, color: "#000000", fontWeight: 700 }}
+                      >
+                        <Trophy size={15} />
+                        Mark Habit as Completed
+                      </button>
+                    )}
+
                     <button
                       onClick={() => openNoteModal(h)}
                       className="rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm mb-1"
@@ -2681,6 +3068,22 @@ export default function HabitTracker() {
                               {parseDate(doneVal).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
                             </div>
                           )}
+                          {!isDone && m.deadline && (() => {
+                            const deadlineTime = new Date(m.deadline).getTime();
+                            const overdue = !isNaN(deadlineTime) && deadlineTime < Date.now();
+                            return (
+                              <div
+                                className="text-xs mt-1.5 flex items-center gap-1"
+                                style={{ color: overdue ? "#E5484D" : "#6E6E6A", marginLeft: "44px" }}
+                              >
+                                <Calendar size={11} />
+                                {overdue ? "Was due " : "Due "}
+                                {new Date(m.deadline).toLocaleDateString("default", { month: "short", day: "numeric" })}
+                                {" at "}
+                                {new Date(m.deadline).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })}
@@ -3671,6 +4074,115 @@ export default function HabitTracker() {
                 style={{ background: quantityEditHabit.color, color: "#000000", fontWeight: 600 }}
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Daily completion trend graph */}
+      {showTrendGraph &&
+        (() => {
+          const series = buildTrendSeries(habits, records, today);
+          const todayDate = parseDate(today);
+          const trackedDays = series.filter((pt) => pt.pct !== null).length;
+          return (
+            <div
+              onClick={() => setShowTrendGraph(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.65)",
+                zIndex: 60,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "20px",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="modal-pop"
+                style={{
+                  background: "#0D0D0D",
+                  border: "1px solid #242422",
+                  borderRadius: "14px",
+                  padding: "18px",
+                  width: "100%",
+                  maxWidth: "420px",
+                  maxHeight: "90vh",
+                  overflowY: "auto",
+                }}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <BarChart3 size={15} color={ACCENT_GREEN} />
+                    <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                      Daily completion
+                    </span>
+                  </div>
+                  <button onClick={() => setShowTrendGraph(false)} aria-label="Close" style={{ color: "#8A8A85" }}>
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="text-xs mb-4" style={{ color: "#6E6E6A" }}>
+                  {trackedDays === 0
+                    ? "No tracked days yet — this fills in as you go."
+                    : `Scroll left to see earlier days · ${trackedDays} day${trackedDays === 1 ? "" : "s"} tracked`}
+                </div>
+                <TrendGraph series={series} todayDate={todayDate} />
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* Mark habit completed confirmation */}
+      {completeHabitConfirm && (
+        <div
+          onClick={cancelCompleteHabit}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-pop"
+            style={{
+              background: "#0D0D0D",
+              border: "1px solid #242422",
+              borderRadius: "14px",
+              padding: "20px",
+              width: "100%",
+              maxWidth: "340px",
+            }}
+          >
+            <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+              Mark "{completeHabitConfirm.name}" as completed?
+            </div>
+            <div className="text-xs mb-5" style={{ color: "#8A8A85" }}>
+              It'll be archived and won't show up in your daily list starting tomorrow. You can reopen it later if you change your mind.
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={cancelCompleteHabit}
+                className="flex-1 rounded-md py-2 text-sm"
+                style={{ background: "transparent", border: "1px solid #262622", color: "#EDEDEA" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCompleteHabit}
+                className="flex-1 rounded-md py-2 text-sm"
+                style={{ background: completeHabitConfirm.color, color: "#000000", fontWeight: 600 }}
+              >
+                Confirm
               </button>
             </div>
           </div>
