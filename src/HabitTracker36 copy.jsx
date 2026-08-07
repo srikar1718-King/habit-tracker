@@ -126,6 +126,7 @@ const PERIODS = [
   { key: "daily", label: "Daily", days: 1 },
   { key: "weekly", label: "Weekly", days: 7 },
   { key: "monthly", label: "Monthly", days: 30 },
+  { key: "yearly", label: "Yearly", days: 365 },
 ];
 
 const COLORS = [
@@ -292,12 +293,7 @@ function DayRing({ pct, size = 40, strokeWidth = 3 }) {
   const p = pct === null ? 0 : Math.max(0, Math.min(100, pct));
   const offset = circumference * (1 - p / 100);
   return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox={`0 0 ${size} ${size}`}
-      style={{ display: "block", transform: "rotate(-90deg)" }}
-    >
+    <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
       <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#242422" strokeWidth={strokeWidth} />
       {p > 0 && (
         <circle
@@ -1322,17 +1318,7 @@ export default function HabitTracker() {
     : parseDate(selectedDate).toLocaleDateString("default", { weekday: "long", month: "short", day: "numeric" });
 
   return (
-    <div
-      className="app-root"
-      style={{
-        background: "#000000",
-        minHeight: "100vh",
-        width: "100%",
-        maxWidth: "100vw",
-        overflowX: "hidden",
-        fontFamily: "'IBM Plex Sans', sans-serif",
-      }}
-    >
+    <div className="app-root" style={{ background: "#000000", minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
         .fraunces { font-family: 'Fraunces', serif; }
@@ -1578,12 +1564,6 @@ export default function HabitTracker() {
         .app-root, .app-root * { text-shadow: 0 0 1px currentColor; }
         input:focus, button:focus-visible { outline: 2px solid #5FCB6C; outline-offset: 2px; }
         input::placeholder { color: #6E6E6A; }
-        html, body { overflow-x: hidden; max-width: 100%; }
-        /* Slightly zoom the habit detail screen out on small phones so the
-           whole layout comfortably fits without any side-to-side scrolling. */
-        @media (max-width: 480px) {
-          .detail-zoom { zoom: 0.92; }
-        }
       `}</style>
 
       <div className="max-w-xl mx-auto px-5 py-10" style={{ paddingBottom: "110px" }}>
@@ -1625,10 +1605,8 @@ export default function HabitTracker() {
                 <div
                   style={{
                     position: "relative",
-                    width: "100%",
-                    maxWidth: "40px",
-                    aspectRatio: "1 / 1",
-                    margin: "0 auto",
+                    width: "40px",
+                    height: "40px",
                     borderRadius: "999px",
                     boxShadow: isSelected ? `0 0 0 2px #000000, 0 0 0 4px ${YELLOW}` : "none",
                   }}
@@ -2422,7 +2400,7 @@ export default function HabitTracker() {
           const timelineGroups = buildTimelineGroups(h);
 
           return (
-            <div className="add-page detail-zoom" style={{ position: "fixed", inset: 0, background: "#000000", zIndex: 50, overflowY: "auto", overflowX: "hidden" }}>
+            <div className="add-page" style={{ position: "fixed", inset: 0, background: "#000000", zIndex: 50, overflowY: "auto" }}>
               <div
                 className="max-w-xl mx-auto px-5 py-6"
                 style={{
