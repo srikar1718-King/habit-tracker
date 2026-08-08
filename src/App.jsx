@@ -62,7 +62,7 @@ const DEFAULT_COLOR = "#5FCB6C";
 const DEFAULT_ICON = "target";
 const YELLOW = "#F2C94C";
 
-// Fixed fan of offsets/sizes for the wordless "blast from the bottom" celebration
+// Fixed fan of offsets/sizes for the "blast from the bottom" celebration
 const BURST_PARTICLES = [
   { dx: -95, dy: -150, size: 8, delay: 0, shape: "square", rot: 140 },
   { dx: -70, dy: -185, size: 6, delay: 0.02, shape: "circle", rot: 0 },
@@ -85,6 +85,23 @@ const BURST_PARTICLES = [
   { dx: 140, dy: -20, size: 5, delay: 0.16, shape: "circle", rot: 0 },
   { dx: -15, dy: -160, size: 5, delay: 0.09, shape: "square", rot: 45 },
   { dx: 15, dy: -160, size: 5, delay: 0.09, shape: "square", rot: -45 },
+  { dx: -165, dy: -60, size: 6, delay: 0.06, shape: "square", rot: 100 },
+  { dx: 165, dy: -60, size: 6, delay: 0.06, shape: "square", rot: -100 },
+  { dx: -150, dy: -135, size: 7, delay: 0.04, shape: "circle", rot: 0 },
+  { dx: 150, dy: -135, size: 7, delay: 0.04, shape: "circle", rot: 0 },
+  { dx: -55, dy: -240, size: 6, delay: 0.1, shape: "square", rot: -90 },
+  { dx: 55, dy: -240, size: 6, delay: 0.1, shape: "square", rot: 90 },
+  { dx: 0, dy: -250, size: 8, delay: 0.06, shape: "circle", rot: 0 },
+  { dx: -180, dy: -95, size: 5, delay: 0.13, shape: "circle", rot: 0 },
+  { dx: 180, dy: -95, size: 5, delay: 0.13, shape: "circle", rot: 0 },
+  { dx: -85, dy: -20, size: 4, delay: 0.18, shape: "square", rot: 30 },
+  { dx: 85, dy: -20, size: 4, delay: 0.18, shape: "square", rot: -30 },
+];
+
+// Short affirmations shown briefly over a completion celebration
+const CELEBRATION_WORDS = [
+  "Nice!", "Great job!", "Crushing it!", "Well done!", "Keep going!",
+  "You did it!", "Strong work!", "On a roll!", "Yes!", "Locked in!",
 ];
 
 // Fragments scattered across a habit card's own footprint (relX/relY as 0-1
@@ -1105,8 +1122,9 @@ export default function HabitTracker() {
 
     if (willBeDone) {
       setAnimatingId(habit.id);
-      setTimeout(() => setAnimatingId(null), 620);
-      setBurst({ id: Date.now() + Math.random(), color: habit.color, origin });
+      setTimeout(() => setAnimatingId(null), 660);
+      const word = CELEBRATION_WORDS[Math.floor(Math.random() * CELEBRATION_WORDS.length)];
+      setBurst({ id: Date.now() + Math.random(), color: habit.color, origin, word });
       setTimeout(() => setBurst(null), 1150);
 
       const newTotal = oldTotal + 1;
@@ -1684,18 +1702,6 @@ export default function HabitTracker() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
         .fraunces { font-family: 'Fraunces', serif; }
         .mono { font-family: 'IBM Plex Mono', monospace; }
-        .strata-bg {
-          position: absolute;
-          inset: 0;
-          z-index: 0;
-          pointer-events: none;
-          background:
-            linear-gradient(180deg, transparent 6%, rgba(95,203,108,0.05) 6%, rgba(95,203,108,0.05) 9%, transparent 9%),
-            linear-gradient(180deg, transparent 26%, rgba(155,93,229,0.045) 26%, rgba(155,93,229,0.045) 29%, transparent 29%),
-            linear-gradient(180deg, transparent 47%, rgba(78,168,222,0.045) 47%, rgba(78,168,222,0.045) 50%, transparent 50%),
-            linear-gradient(180deg, transparent 68%, rgba(238,108,77,0.04) 68%, rgba(238,108,77,0.04) 71%, transparent 71%),
-            linear-gradient(180deg, transparent 89%, rgba(242,201,76,0.04) 89%, rgba(242,201,76,0.04) 92%, transparent 92%);
-        }
         .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; }
         .habit-card:active { transform: scale(0.99); }
         @keyframes deleteAway {
@@ -1716,6 +1722,12 @@ export default function HabitTracker() {
         }
         .name-text { transition: color 0.25s ease; }
         .tick-btn { transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease; }
+        .icon-action-btn {
+          background-color: #0D0D0D;
+          background-image: linear-gradient(160deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 55%);
+          transition: transform 0.12s ease, border-color 0.15s ease;
+        }
+        .icon-action-btn:active { transform: scale(0.9); }
         .tick-btn:active { transform: scale(0.9); }
         @keyframes tickGlow {
           0% { box-shadow: 0 0 0 0 var(--glow-color); transform: scale(0.75); }
@@ -1725,33 +1737,71 @@ export default function HabitTracker() {
         .tick-glow { animation: tickGlow 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
         @keyframes burstParticle {
           0% { transform: translate(0, 0) rotate(0deg) scale(0.4); opacity: 1; }
-          50% { opacity: 1; }
+          45% { opacity: 1; }
           100% { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.15); opacity: 0; }
         }
         .burst-particle {
           position: absolute;
           left: 0;
           top: 0;
-          animation: burstParticle 1.05s cubic-bezier(0.12, 0.7, 0.25, 1) forwards;
+          animation: burstParticle 1.2s cubic-bezier(0.12, 0.7, 0.25, 1) forwards;
         }
         @keyframes shockwave {
-          0% { width: 10px; height: 10px; opacity: 0.9; }
-          100% { width: 140px; height: 140px; opacity: 0; }
+          0% { width: 10px; height: 10px; opacity: 0.95; border-width: 3px; }
+          100% { width: 210px; height: 210px; opacity: 0; border-width: 0.5px; }
         }
         .shockwave-ring {
           position: absolute;
           top: 50%;
           left: 50%;
           border-radius: 999px;
-          border: 2px solid var(--ring-color);
+          border: 3px solid var(--ring-color);
           transform: translate(-50%, -50%);
-          animation: shockwave 0.6s ease-out forwards;
+          animation: shockwave 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        @keyframes shockwave2 {
+          0% { width: 6px; height: 6px; opacity: 0.6; }
+          100% { width: 320px; height: 320px; opacity: 0; }
+        }
+        .shockwave-ring-2 {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          border-radius: 999px;
+          border: 1.5px solid var(--ring-color);
+          transform: translate(-50%, -50%);
+          animation: shockwave2 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          animation-delay: 0.06s;
+        }
+        @keyframes celebrateText {
+          0% { transform: translate(-50%, 6px) scale(0.7); opacity: 0; }
+          22% { transform: translate(-50%, -14px) scale(1.12); opacity: 1; }
+          70% { transform: translate(-50%, -34px) scale(1); opacity: 1; }
+          100% { transform: translate(-50%, -58px) scale(0.96); opacity: 0; }
+        }
+        .celebrate-text {
+          position: absolute;
+          left: 0;
+          bottom: 18px;
+          transform: translate(-50%, 0);
+          white-space: nowrap;
+          font-size: 17px;
+          font-weight: 600;
+          color: var(--text-color);
+          text-shadow: 0 0 18px var(--text-color), 0 2px 6px rgba(0,0,0,0.6);
+          animation: celebrateText 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
         }
         @keyframes screenFlash {
-          0% { opacity: 0.16; }
+          0% { opacity: 0.24; }
           100% { opacity: 0; }
         }
-        .screen-flash { animation: screenFlash 0.35s ease-out forwards; }
+        .screen-flash { animation: screenFlash 0.4s ease-out forwards; }
+        @keyframes cardCompletePop {
+          0% { box-shadow: inset 0 0 0 0 var(--card-glow), 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8); transform: scale(1); }
+          30% { box-shadow: inset 0 0 48px 8px var(--card-glow), 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8); transform: scale(1.016); }
+          100% { box-shadow: inset 0 0 0 0 transparent, 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8); transform: scale(1); }
+        }
+        .card-complete-pop { animation: cardCompletePop 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
         .star-btn { transition: transform 0.12s ease; background: transparent; border: none; padding: 2px; cursor: pointer; }
         .star-btn:hover { transform: scale(1.15); }
         .period-btn { transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
@@ -1981,15 +2031,29 @@ export default function HabitTracker() {
         </div>
       )}
 
-      <div className="strata-bg" />
-
       <div className="app-content max-w-xl mx-auto px-5 py-10" style={{ paddingBottom: "110px" }}>
         {/* Header */}
         <div className="flex items-baseline justify-between mb-1">
-          <h1 className="fraunces text-3xl" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-            Strata
-          </h1>
-          <span className="mono text-xs tracking-wide" style={{ color: "#8A8A85" }}>
+          <div className="flex items-center gap-2.5">
+            <div className="flex flex-col gap-[3px]" aria-hidden="true">
+              <div style={{ width: "16px", height: "3px", borderRadius: "2px", background: ACCENT_GREEN }} />
+              <div style={{ width: "12px", height: "3px", borderRadius: "2px", background: "#9B5DE5" }} />
+              <div style={{ width: "8px", height: "3px", borderRadius: "2px", background: "#F2C94C" }} />
+            </div>
+            <h1 className="fraunces text-3xl" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+              Strata
+            </h1>
+          </div>
+          <span
+            className="mono text-xs tracking-wide rounded-full"
+            style={{
+              color: "#8A8A85",
+              border: "1px solid #242422",
+              padding: "3px 9px",
+              backgroundColor: "#0D0D0D",
+              backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 60%)",
+            }}
+          >
             HABIT TRACKER
           </span>
         </div>
@@ -1998,7 +2062,20 @@ export default function HabitTracker() {
         </p>
 
         {/* This week */}
-        <div className="grid grid-cols-7 gap-1 mb-8">
+        <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+          <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
+          THIS WEEK
+        </div>
+        <div
+          className="rounded-lg mb-8"
+          style={{
+            padding: "14px 10px 10px",
+            backgroundColor: "#0D0D0D",
+            backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0) 45%)",
+            border: "1px solid #1C1C19",
+          }}
+        >
+        <div className="grid grid-cols-7 gap-1">
           {getCurrentWeekDates(today).map((d) => {
             const ds = fmt(d);
             const isToday = ds === today;
@@ -2049,6 +2126,7 @@ export default function HabitTracker() {
             );
           })}
         </div>
+        </div>
 
         {/* Average completion */}
         <div
@@ -2062,7 +2140,8 @@ export default function HabitTracker() {
         >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs mono" style={{ color: "#8A8A85" }}>
+              <span className="text-xs mono flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
+                <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: pctColor(avg), display: "inline-block" }} />
                 AVERAGE COMPLETION
               </span>
               <button
@@ -2161,7 +2240,7 @@ export default function HabitTracker() {
                   ref={(el) => {
                     if (el) cardRefs.current[h.id] = el;
                   }}
-                  className={`habit-card rounded-lg p-3 flex gap-3 ${deletingId === h.id ? "deleting" : ""}`}
+                  className={`habit-card rounded-lg p-3 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
                   style={{
                     backgroundColor: "#141412",
                     backgroundImage: "linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)",
@@ -2170,6 +2249,7 @@ export default function HabitTracker() {
                     borderBottom: "1px solid #242422",
                     borderLeft: `3px solid ${h.color}`,
                     boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8)",
+                    "--card-glow": hexToRgba(h.color, 0.6),
                   }}
                   onPointerDown={handleCardDown}
                   onPointerUp={() => handleCardUp(h)}
@@ -2179,7 +2259,12 @@ export default function HabitTracker() {
                   <div className="shrink-0 flex flex-col items-center" style={{ width: "40px" }}>
                     <div
                       className="w-10 h-10 rounded-full flex items-center justify-center"
-                      style={{ position: "relative", background: hexToRgba(h.color, 0.15) }}
+                      style={{
+                        position: "relative",
+                        backgroundColor: hexToRgba(h.color, 0.14),
+                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
+                      }}
                     >
                       <HabitIcon size={19} color={h.color} />
                       {(() => {
@@ -2302,13 +2387,19 @@ export default function HabitTracker() {
                                 onPointerUp={(e) => e.stopPropagation()}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  toggle(h);
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const origin = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                                  toggle(h, origin);
                                 }}
                                 className={`tick-btn shrink-0 w-8 h-8 rounded-full flex items-center justify-center border-2 ${animatingId === h.id ? "tick-glow" : ""}`}
                                 style={{
                                   position: "relative",
-                                  background: done ? h.color : "transparent",
+                                  backgroundColor: done ? h.color : "transparent",
+                                  backgroundImage: done
+                                    ? `linear-gradient(150deg, ${lightenColor(h.color, 0.4)} 0%, ${h.color} 65%)`
+                                    : "none",
                                   borderColor: done ? h.color : "#4A4A45",
+                                  boxShadow: done ? `0 2px 10px ${hexToRgba(h.color, 0.5)}` : "none",
                                   overflow: "visible",
                                   "--glow-color": h.color,
                                 }}
@@ -2426,7 +2517,7 @@ export default function HabitTracker() {
         </div>
       )}
 
-      {/* Wordless celebration burst */}
+      {/* Completion celebration burst */}
       {burst && (
         <>
           <div key={`flash-${burst.id}`} className="screen-flash" style={{ position: "fixed", inset: 0, background: burst.color, zIndex: 39, pointerEvents: "none" }} />
@@ -2444,6 +2535,12 @@ export default function HabitTracker() {
             }}
           >
             <div className="shockwave-ring" style={{ "--ring-color": burst.color }} />
+            <div className="shockwave-ring-2" style={{ "--ring-color": burst.color }} />
+            {burst.word && (
+              <span className="celebrate-text fraunces" style={{ "--text-color": burst.color }}>
+                {burst.word}
+              </span>
+            )}
             {BURST_PARTICLES.map((p, i) => (
               <div
                 key={i}
@@ -2919,8 +3016,8 @@ export default function HabitTracker() {
                   <button
                     onClick={() => openEditModal(h)}
                     aria-label="Edit habit"
-                    className="w-9 h-9 rounded-full flex items-center justify-center"
-                    style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#EDEDEA" }}
+                    className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                    style={{ border: "1px solid #242422", color: "#EDEDEA" }}
                   >
                     <Pencil size={15} />
                   </button>
@@ -2997,8 +3094,8 @@ export default function HabitTracker() {
                     <button
                       onClick={() => setAchievementsHabit(h)}
                       aria-label="View achievements"
-                      className="w-9 h-9 rounded-full flex items-center justify-center"
-                      style={{ background: "#0D0D0D", border: "1px solid #242422", color: YELLOW }}
+                      className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                      style={{ border: "1px solid #242422", color: YELLOW }}
                     >
                       <Trophy size={15} />
                     </button>
@@ -3006,8 +3103,8 @@ export default function HabitTracker() {
                       <button
                         onClick={() => setStatsHabit(h)}
                         aria-label="View stats"
-                        className="w-9 h-9 rounded-full flex items-center justify-center"
-                        style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#EDEDEA" }}
+                        className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                        style={{ border: "1px solid #242422", color: "#EDEDEA" }}
                       >
                         <BarChart3 size={15} />
                       </button>
@@ -3018,8 +3115,8 @@ export default function HabitTracker() {
                         setDetailMonthCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
                       }}
                       aria-label="View calendar"
-                      className="w-9 h-9 rounded-full flex items-center justify-center"
-                      style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#EDEDEA" }}
+                      className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                      style={{ border: "1px solid #242422", color: "#EDEDEA" }}
                     >
                       <Calendar size={15} />
                     </button>
@@ -3029,7 +3126,15 @@ export default function HabitTracker() {
                 {/* Stats */}
                 {!isMilestoneHabit && (
                 <div className="detail-fade-3 grid grid-cols-2 gap-2 mb-5">
-                  <div className="stat-box rounded-lg py-4 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                  <div
+                    className="stat-box rounded-lg py-4 text-center"
+                    style={{
+                      backgroundColor: "#0D0D0D",
+                      backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 45%)",
+                      border: "1px solid #242422",
+                      boxShadow: `inset 0 -2px 0 0 ${streak > 0 ? "#F2994A" : "#242422"}`,
+                    }}
+                  >
                     <div className="flex items-center justify-center gap-1.5">
                       <Flame size={14} color={streak > 0 ? "#F2994A" : "#6E6E6A"} fill={streak > 0 ? "#F2994A" : "transparent"} />
                       <span className="text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
@@ -3040,7 +3145,15 @@ export default function HabitTracker() {
                       Current Streak
                     </div>
                   </div>
-                  <div className="stat-box rounded-lg py-4 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                  <div
+                    className="stat-box rounded-lg py-4 text-center"
+                    style={{
+                      backgroundColor: "#0D0D0D",
+                      backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 45%)",
+                      border: "1px solid #242422",
+                      boxShadow: `inset 0 -2px 0 0 ${bestStreak > 0 ? YELLOW : "#242422"}`,
+                    }}
+                  >
                     <div className="flex items-center justify-center gap-1.5">
                       <TrendingUp size={14} color={bestStreak > 0 ? YELLOW : "#6E6E6A"} />
                       <span className="text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
@@ -3051,7 +3164,15 @@ export default function HabitTracker() {
                       Best Streak
                     </div>
                   </div>
-                  <div className="stat-box rounded-lg py-4 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                  <div
+                    className="stat-box rounded-lg py-4 text-center"
+                    style={{
+                      backgroundColor: "#0D0D0D",
+                      backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 45%)",
+                      border: "1px solid #242422",
+                      boxShadow: `inset 0 -2px 0 0 ${totalDays > 0 ? h.color : "#242422"}`,
+                    }}
+                  >
                     <div className="flex items-center justify-center gap-1.5">
                       <Check size={14} color={h.color} strokeWidth={3} />
                       <span className="text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
@@ -3062,7 +3183,15 @@ export default function HabitTracker() {
                       Total Days Done
                     </div>
                   </div>
-                  <div className="stat-box rounded-lg py-4 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                  <div
+                    className="stat-box rounded-lg py-4 text-center"
+                    style={{
+                      backgroundColor: "#0D0D0D",
+                      backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 45%)",
+                      border: "1px solid #242422",
+                      boxShadow: `inset 0 -2px 0 0 ${score !== null ? h.color : "#242422"}`,
+                    }}
+                  >
                     <div className="flex items-center justify-center gap-1.5">
                       <BarChart3 size={14} color={h.color} />
                       <span className="text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
@@ -3079,7 +3208,12 @@ export default function HabitTracker() {
                 {quantityTotal !== null && (
                   <div
                     className="detail-fade-3 rounded-lg py-4 px-5 mb-5 flex items-center justify-between"
-                    style={{ background: "#0D0D0D", border: "1px solid #242422" }}
+                    style={{
+                      backgroundColor: "#0D0D0D",
+                      backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 45%)",
+                      border: "1px solid #242422",
+                      boxShadow: `inset 0 -2px 0 0 ${h.color}`,
+                    }}
                   >
                     <span className="text-sm" style={{ color: "#8A8A85" }}>
                       Total {h.quantityTracking.label}
@@ -3171,8 +3305,12 @@ export default function HabitTracker() {
                               style={{
                                 position: "relative",
                                 overflow: "visible",
-                                background: isDone ? h.color : "transparent",
+                                backgroundColor: isDone ? h.color : "transparent",
+                                backgroundImage: isDone
+                                  ? `linear-gradient(150deg, ${lightenColor(h.color, 0.4)} 0%, ${h.color} 65%)`
+                                  : "none",
                                 borderColor: isDone ? h.color : "#4A4A45",
+                                boxShadow: isDone ? `0 2px 10px ${hexToRgba(h.color, 0.5)}` : "none",
                                 "--glow-color": h.color,
                               }}
                             >
