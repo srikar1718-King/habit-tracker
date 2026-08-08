@@ -1696,6 +1696,7 @@ export default function HabitTracker() {
             linear-gradient(180deg, transparent 68%, rgba(238,108,77,0.04) 68%, rgba(238,108,77,0.04) 71%, transparent 71%),
             linear-gradient(180deg, transparent 89%, rgba(242,201,76,0.04) 89%, rgba(242,201,76,0.04) 92%, transparent 92%);
         }
+        .app-content { position: relative; z-index: 1; }
         .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; }
         .habit-card:active { transform: scale(0.99); }
         @keyframes deleteAway {
