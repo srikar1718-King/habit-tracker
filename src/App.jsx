@@ -129,32 +129,6 @@ const SHATTER_FRAGMENTS = [
   { relX: 0.82, relY: 0.35, dx: 100, dy: -75, rot: 140, size: 6 },
 ];
 
-// Small radial burst representing the padlock cracking apart mid coin-flip
-const LOCK_SHATTER_PARTICLES = [
-  { dx: -38, dy: -22, rot: -80, size: 5 },
-  { dx: 38, dy: -22, rot: 80, size: 5 },
-  { dx: -26, dy: 32, rot: 120, size: 4 },
-  { dx: 26, dy: 32, rot: -120, size: 4 },
-  { dx: 0, dy: -42, rot: 40, size: 5 },
-  { dx: 0, dy: 42, rot: -40, size: 5 },
-  { dx: -42, dy: 6, rot: 160, size: 4 },
-  { dx: 42, dy: 6, rot: -160, size: 4 },
-  { dx: -18, dy: -36, rot: 60, size: 4 },
-  { dx: 18, dy: -36, rot: -60, size: 4 },
-];
-
-// Tiny burst used for each of the 3 taps while cracking the lock open
-const SPARK_PARTICLES = [
-  { dx: -22, dy: -15 },
-  { dx: 22, dy: -15 },
-  { dx: -16, dy: 20 },
-  { dx: 16, dy: 20 },
-  { dx: -26, dy: 4 },
-  { dx: 26, dy: 4 },
-  { dx: 0, dy: -24 },
-  { dx: 0, dy: 22 },
-];
-
 // --- Trophy celebration sound + haptics (synthesized, no audio files needed) ---
 function playTone(ctx, freq, startTime, duration, gainPeak, type) {
   try {
@@ -172,14 +146,6 @@ function playTone(ctx, freq, startTime, duration, gainPeak, type) {
   } catch (e) {
     // audio isn't essential — fail silently
   }
-}
-
-// A short rising click for each of the 3 taps while cracking the lock,
-// pitching up each time so the buildup itself feels like it's escalating
-function playTapTick(ctx, tapIndex) {
-  if (!ctx) return;
-  const now = ctx.currentTime;
-  playTone(ctx, 260 + tapIndex * 90, now, 0.09, 0.1, "square");
 }
 
 // A bright ascending arpeggio into a shimmering top note — reads as a small
@@ -291,6 +257,15 @@ function isVisibleOn(habit, dateStr) {
 function countsTowardPercentOn(habit, dateStr) {
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
   return isScheduledOn(habit, dateStr);
+}
+
+// How much a habit's completion pulls on a day's overall percentage —
+// combines difficulty (how hard it is) with importance (how much it
+// matters), so a hard, high-importance habit moves the number more than an
+// easy, low-importance one. Importance defaults to 3 ("medium") for habits
+// created before this field existed.
+function habitWeight(habit) {
+  return habit.difficulty + (habit.importance || 3);
 }
 
 // A milestone-type habit only contributes to a day's percentage once the
@@ -548,9 +523,9 @@ function getColorShades(baseHex) {
 const DEFAULT_REMINDER = { enabled: false, time: "09:00", days: ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] };
 
 const seedHabits = [
-  { id: 1, name: "Drink water", description: "Stay hydrated through the day", difficulty: 1, color: "#4EA8DE", icon: "droplet", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: false, label: "" } },
-  { id: 2, name: "Read 20 pages", description: "", difficulty: 3, color: "#9B5DE5", icon: "book", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: true, label: "Pages read" } },
-  { id: 3, name: "No phone after 10pm", description: "Wind down before bed", difficulty: 4, color: "#F3722C", icon: "moon", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: false, label: "" } },
+  { id: 1, name: "Drink water", description: "Stay hydrated through the day", difficulty: 1, importance: 3, color: "#4EA8DE", icon: "droplet", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: false, label: "" } },
+  { id: 2, name: "Read 20 pages", description: "", difficulty: 3, importance: 4, color: "#9B5DE5", icon: "book", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: true, label: "Pages read" } },
+  { id: 3, name: "No phone after 10pm", description: "Wind down before bed", difficulty: 4, importance: 5, color: "#F3722C", icon: "moon", frequency: { type: "everyday" }, reminder: DEFAULT_REMINDER, usesPercentage: false, quantityTracking: { enabled: false, label: "" } },
 ];
 
 function fmt(date) {
@@ -583,7 +558,7 @@ function StarDisplay({ value, color = YELLOW, mutedColor = "#4A4A47" }) {
   );
 }
 
-function StarPicker({ value, onChange }) {
+function StarPicker({ value, onChange, label = "difficulty" }) {
   return (
     <div className="flex items-center gap-1">
       {Array.from({ length: MAX_DIFFICULTY }, (_, i) => i + 1).map((i) => {
@@ -593,7 +568,7 @@ function StarPicker({ value, onChange }) {
             key={i}
             type="button"
             className="star-btn"
-            aria-label={`Set difficulty to ${i}`}
+            aria-label={`Set ${label} to ${i}`}
             onClick={() => onChange(i)}
           >
             <Star
@@ -781,8 +756,9 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
         if (!countsTowardPercentOn(hb, ds)) return;
-        total += hb.difficulty;
-        if (val) done += hb.difficulty;
+        const w = habitWeight(hb);
+        total += w;
+        if (val) done += w;
       });
     }
     habits.forEach((hb) => {
@@ -790,8 +766,9 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
       if (hb.completed && hb.completedDate && ds > hb.completedDate) return;
       const contribution = milestoneDayContribution(hb, ds, milestoneTargets, milestoneCompletions);
       if (!contribution || contribution.total === 0) return;
-      total += hb.difficulty;
-      done += hb.difficulty * (contribution.done / contribution.total);
+      const w = habitWeight(hb);
+      total += w;
+      done += w * (contribution.done / contribution.total);
     });
     const pct = total === 0 ? null : Math.round((done / total) * 100);
     series.push({ date: ds, pct });
@@ -920,6 +897,7 @@ export default function HabitTracker() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [difficulty, setDifficulty] = useState(1);
+  const [importance, setImportance] = useState(3);
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [icon, setIcon] = useState(DEFAULT_ICON);
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -1260,7 +1238,7 @@ export default function HabitTracker() {
       const crossed = levels.filter((l) => oldTotal < l.threshold && newTotal >= l.threshold);
       if (crossed.length > 0) {
         const level = crossed[crossed.length - 1];
-        setTrophyUnlock({ id: Date.now() + Math.random(), habit, level, phase: "tap", taps: 0, tapKey: 0 });
+        setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
       }
     }
   };
@@ -1307,7 +1285,7 @@ export default function HabitTracker() {
       if (crossed.length > 0) {
         const level = crossed[crossed.length - 1];
         setTimeout(() => {
-          setTrophyUnlock({ id: Date.now() + Math.random(), habit, level, phase: "tap", taps: 0, tapKey: 0 });
+          setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
         }, 350);
       }
     }
@@ -1327,38 +1305,21 @@ export default function HabitTracker() {
       const crossed = ACHIEVEMENT_LEVELS.filter((l) => oldTotal < l.threshold && newTotal >= l.threshold);
       if (crossed.length > 0) {
         const level = crossed[crossed.length - 1];
-        setTrophyUnlock({ id: Date.now() + Math.random(), habit, level, phase: "tap", taps: 0, tapKey: 0 });
+        setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
       }
     }
   };
 
-  // Trophy reveal now plays entirely on its own — no tapping required. It
-  // still auto-"cracks" in 3 escalating beats (same sound/haptic/visual
-  // language as before) purely for dramatic buildup, then reveals.
+  // The trophy reveals immediately and automatically — no lock, no tapping,
+  // no buildup. Sound + haptics fire right as it appears, then it holds for
+  // a few seconds before auto-dismissing.
   useEffect(() => {
-    if (!trophyUnlock || trophyUnlock.phase !== "tap") return;
+    if (!trophyUnlock) return;
     const ctx = getAudioContext();
-    const timers = [];
-    [1, 2, 3].forEach((tapNum, idx) => {
-      timers.push(
-        setTimeout(() => {
-          playTapTick(ctx, tapNum - 1);
-          triggerHaptics(tapNum >= 3 ? [20] : [12]);
-          setTrophyUnlock((p) => (p && p.phase === "tap" ? { ...p, taps: tapNum, tapKey: p.tapKey + 1 } : p));
-          if (tapNum >= 3) {
-            timers.push(
-              setTimeout(() => {
-                setTrophyUnlock((p) => (p ? { ...p, phase: "celebrate" } : p));
-                playTrophyFanfare(ctx);
-                triggerHaptics([30, 40, 30, 40, 110]);
-                timers.push(setTimeout(() => setTrophyUnlock(null), 3400));
-              }, 420)
-            );
-          }
-        }, 280 + idx * 280)
-      );
-    });
-    return () => timers.forEach(clearTimeout);
+    playTrophyFanfare(ctx);
+    triggerHaptics([30, 40, 30, 40, 110]);
+    const t = setTimeout(() => setTrophyUnlock(null), 3400);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trophyUnlock?.id]);
 
@@ -1397,6 +1358,7 @@ export default function HabitTracker() {
     setName("");
     setDescription("");
     setDifficulty(1);
+    setImportance(3);
     const { color: randColor, icon: randIcon } = pickRandomColorAndIcon();
     setColor(randColor);
     setIcon(randIcon);
@@ -1471,7 +1433,7 @@ export default function HabitTracker() {
     if (editingHabitId) {
       const newHabits = habits.map((h) =>
         h.id === editingHabitId
-          ? { ...h, name: trimmed, description: description.trim(), difficulty, color, icon, frequency, reminder, quantityTracking, milestones }
+          ? { ...h, name: trimmed, description: description.trim(), difficulty, importance, color, icon, frequency, reminder, quantityTracking, milestones }
           : h
       );
       persistHabits(newHabits);
@@ -1492,6 +1454,7 @@ export default function HabitTracker() {
         name: trimmed,
         description: description.trim(),
         difficulty,
+        importance,
         color,
         icon,
         frequency,
@@ -1537,6 +1500,7 @@ export default function HabitTracker() {
     setName(habit.name);
     setDescription(habit.description || "");
     setDifficulty(habit.difficulty);
+    setImportance(habit.importance || 3);
     setColor(habit.color);
     setIcon(habit.icon);
     setShowColorPicker(false);
@@ -1826,8 +1790,9 @@ export default function HabitTracker() {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
         if (!countsTowardPercentOn(hb, dateStr)) return;
-        total += hb.difficulty;
-        if (val) done += hb.difficulty;
+        const w = habitWeight(hb);
+        total += w;
+        if (val) done += w;
       });
     }
     habits.forEach((hb) => {
@@ -1835,8 +1800,9 @@ export default function HabitTracker() {
       if (hb.completed && hb.completedDate && dateStr > hb.completedDate) return;
       const contribution = milestoneDayContribution(hb, dateStr, milestoneTargets, milestoneCompletions);
       if (!contribution || contribution.total === 0) return;
-      total += hb.difficulty;
-      done += hb.difficulty * (contribution.done / contribution.total);
+      const w = habitWeight(hb);
+      total += w;
+      done += w * (contribution.done / contribution.total);
     });
     if (total === 0) return null;
     return Math.round((done / total) * 100);
@@ -2085,40 +2051,6 @@ export default function HabitTracker() {
         .month-day-cell:active { transform: scale(0.9); }
         @keyframes trophyBackdropIn { 0% { opacity: 0; } 100% { opacity: 1; } }
         .trophy-backdrop { animation: trophyBackdropIn 0.2s ease-out forwards; }
-        @keyframes tapBounce {
-          0% { transform: scale(1); }
-          35% { transform: scale(1.22); }
-          65% { transform: scale(0.93); }
-          100% { transform: scale(1); }
-        }
-        .tap-bounce { animation: tapBounce 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
-        @keyframes crackLineIn {
-          0% { opacity: 0; transform: translate(-50%, -50%) scaleY(0); }
-          100% { opacity: 0.9; transform: translate(-50%, -50%) scaleY(1); }
-        }
-        .crack-line { animation: crackLineIn 0.2s ease-out forwards; }
-        @keyframes sparkPop {
-          0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.2); opacity: 0; }
-        }
-        .spark-piece { position: absolute; top: 50%; left: 50%; border-radius: 999px; animation: sparkPop 0.5s ease-out forwards; }
-        @keyframes dotFillIn {
-          0% { transform: scale(0.5); opacity: 0.3; }
-          60% { transform: scale(1.3); }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        .dot-fill { animation: dotFillIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-        @keyframes lockRingPulse {
-          0%, 100% { opacity: 0.35; transform: scale(1); }
-          50% { opacity: 0.7; transform: scale(1.05); }
-        }
-        .lock-ring-pulse { animation: lockRingPulse 1.8s ease-in-out infinite; }
-        @keyframes finalTapCharge {
-          0% { opacity: 0; }
-          45% { opacity: 0.85; }
-          100% { opacity: 0; }
-        }
-        .final-tap-charge { animation: finalTapCharge 0.5s ease-out forwards; }
         @keyframes spotlightIn {
           0% { opacity: 0; transform: translateX(-50%) scaleY(0.7); }
           20% { opacity: 1; }
@@ -2164,30 +2096,12 @@ export default function HabitTracker() {
           100% { transform: scale(1) rotate(0deg); opacity: 1; }
         }
         .trophy-badge-in { animation: trophyBadgeIn 0.75s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-        @keyframes coinFlip {
-          0% { transform: rotateY(0deg); }
-          100% { transform: rotateY(180deg); }
+        @keyframes trophyIconIn {
+          0% { transform: scale(0.4) rotate(-18deg); opacity: 0; }
+          55% { transform: scale(1.2) rotate(8deg); opacity: 1; }
+          100% { transform: scale(1) rotate(0deg); opacity: 1; }
         }
-        .coin-flip { animation: coinFlip 0.7s cubic-bezier(0.5, 0, 0.5, 1) forwards; }
-        .badge-face {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          backface-visibility: hidden;
-        }
-        .badge-face-back { transform: rotateY(180deg); }
-        @keyframes lockShatterPiece {
-          0% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
-          100% { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.2); opacity: 0; }
-        }
-        .lock-shatter-piece {
-          position: absolute;
-          border-radius: 2px;
-          opacity: 0;
-          animation: lockShatterPiece 0.55s cubic-bezier(0.15, 0.7, 0.25, 1) forwards;
-        }
+        .trophy-icon-in { animation: trophyIconIn 0.55s 0.08s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
         @keyframes glowRing {
           0% { width: 16px; height: 16px; opacity: 1; border-width: 5px; }
           100% { width: 360px; height: 360px; opacity: 0; border-width: 1px; }
@@ -2993,7 +2907,20 @@ export default function HabitTracker() {
                 Difficulty
               </span>
               <div className="mt-3">
-                <StarPicker value={difficulty} onChange={setDifficulty} />
+                <StarPicker value={difficulty} onChange={setDifficulty} label="difficulty" />
+              </div>
+            </div>
+
+            <div className="rounded-lg p-4 mb-5" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+              <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 500 }}>
+                Importance
+              </span>
+              <div className="text-xs mt-0.5" style={{ color: "#8A8A85" }}>
+                How much this habit matters to you — shown on the habit's own page, and factored into your daily
+                percentage alongside difficulty.
+              </div>
+              <div className="mt-3">
+                <StarPicker value={importance} onChange={setImportance} label="importance" />
               </div>
             </div>
 
@@ -3901,7 +3828,14 @@ export default function HabitTracker() {
                   </button>
                 </div>
                 <div className="mb-4">
+                  <div className="text-xs mb-1.5" style={{ color: "#8A8A85" }}>
+                    Difficulty
+                  </div>
                   <StarDisplay value={h.difficulty} />
+                  <div className="text-xs mb-1.5 mt-3" style={{ color: "#8A8A85" }}>
+                    Importance
+                  </div>
+                  <StarDisplay value={h.importance || 3} />
                 </div>
                 <Heatmap
                   habit={h}
@@ -4111,11 +4045,11 @@ export default function HabitTracker() {
           );
         })()}
 
-      {/* Trophy unlock celebration — plays automatically, no interaction needed */}
+      {/* Trophy unlock celebration — reveals immediately, no lock/tap mechanic */}
       {trophyUnlock && (
         <div
           key={trophyUnlock.id}
-          className={`trophy-backdrop ${trophyUnlock.phase === "celebrate" ? "screen-punch" : ""}`}
+          className="trophy-backdrop screen-punch"
           style={{
             position: "fixed",
             inset: 0,
@@ -4128,112 +4062,6 @@ export default function HabitTracker() {
             overflow: "hidden",
           }}
         >
-          {trophyUnlock.phase === "tap" && (
-            <>
-              {trophyUnlock.taps >= 3 && (
-                <div
-                  key="final-charge"
-                  className="final-tap-charge"
-                  style={{ position: "absolute", inset: 0, background: "#FFFFFF", pointerEvents: "none" }}
-                />
-              )}
-              <div
-                className="lock-ring-pulse"
-                style={{
-                  position: "absolute",
-                  top: "42%",
-                  left: "50%",
-                  width: "170px",
-                  height: "170px",
-                  borderRadius: "999px",
-                  border: `1px solid ${trophyUnlock.level.color}`,
-                  transform: "translate(-50%, -50%)",
-                  pointerEvents: "none",
-                }}
-              />
-              <div style={{ position: "relative", width: "140px", height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div
-                  key={trophyUnlock.tapKey}
-                  role="img"
-                  aria-label="Unlocking your reward"
-                  className="tap-bounce"
-                  style={{
-                    position: "relative",
-                    width: "112px",
-                    height: "112px",
-                    borderRadius: "999px",
-                    background: hexToRgba(trophyUnlock.level.color, 0.1 + trophyUnlock.taps * 0.06),
-                    border: `2px solid ${hexToRgba(trophyUnlock.level.color, 0.35 + trophyUnlock.taps * 0.2)}`,
-                    boxShadow: `0 0 ${24 + trophyUnlock.taps * 14}px ${hexToRgba(trophyUnlock.level.color, 0.25 + trophyUnlock.taps * 0.15)}`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Lock size={38} color="#EDEDEA" />
-                  {[0, 1, 2].map(
-                    (i) =>
-                      trophyUnlock.taps > i && (
-                        <div
-                          key={i}
-                          className="crack-line"
-                          style={{
-                            position: "absolute",
-                            top: "50%",
-                            left: "50%",
-                            width: "2px",
-                            height: `${28 + i * 6}px`,
-                            background: "#EDEDEA",
-                            transformOrigin: "center",
-                            transform: `translate(-50%, -50%) rotate(${[22, -28, 55][i]}deg)`,
-                          }}
-                        />
-                      )
-                  )}
-                  {trophyUnlock.taps > 0 && (
-                    <div key={`spark-${trophyUnlock.tapKey}`} style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-                      {SPARK_PARTICLES.map((p, i) => (
-                        <div
-                          key={i}
-                          className="spark-piece"
-                          style={{
-                            width: "4px",
-                            height: "4px",
-                            background: trophyUnlock.level.color,
-                            "--dx": `${p.dx}px`,
-                            "--dy": `${p.dy}px`,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="text-center mt-7 px-8">
-                <div className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-                  Unlocking your reward...
-                </div>
-                <div className="flex items-center justify-center gap-2 mt-3">
-                  {[0, 1, 2].map((i) => (
-                    <div
-                      key={i}
-                      className={trophyUnlock.taps > i ? "dot-fill" : ""}
-                      style={{
-                        width: "9px",
-                        height: "9px",
-                        borderRadius: "999px",
-                        background: trophyUnlock.taps > i ? trophyUnlock.level.color : "#3A3A35",
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          {trophyUnlock.phase === "celebrate" && (
-            <>
           <div
             className="spotlight-beam"
             style={{
@@ -4371,33 +4199,7 @@ export default function HabitTracker() {
                 }}
               >
                 <div className="shimmer-sweep" />
-                <div style={{ position: "relative", width: "62px", height: "62px", perspective: "300px" }}>
-                  <div className="coin-flip" style={{ position: "relative", width: "100%", height: "100%", transformStyle: "preserve-3d" }}>
-                    <div className="badge-face">
-                      <Lock size={40} color="#6E6E6A" />
-                    </div>
-                    <div className="badge-face badge-face-back">
-                      <Trophy size={52} color={trophyUnlock.level.color} />
-                    </div>
-                  </div>
-                  <div style={{ position: "absolute", top: "50%", left: "50%", width: 0, height: 0, pointerEvents: "none" }}>
-                    {LOCK_SHATTER_PARTICLES.map((p, i) => (
-                      <div
-                        key={i}
-                        className="lock-shatter-piece"
-                        style={{
-                          width: `${p.size}px`,
-                          height: `${p.size}px`,
-                          background: i % 2 === 0 ? "#9A9A94" : trophyUnlock.level.color,
-                          animationDelay: "0.33s",
-                          "--dx": `${p.dx}px`,
-                          "--dy": `${p.dy}px`,
-                          "--rot": `${p.rot}deg`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <Trophy size={54} color={trophyUnlock.level.color} className="trophy-icon-in" />
               </div>
             </div>
           </div>
@@ -4420,8 +4222,6 @@ export default function HabitTracker() {
               {trophyUnlock.habit.name} — {trophyUnlock.level.threshold} days
             </div>
           </div>
-            </>
-          )}
         </div>
       )}
 
