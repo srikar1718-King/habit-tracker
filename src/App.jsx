@@ -102,6 +102,9 @@ const BURST_PARTICLES = [
 const CELEBRATION_WORDS = [
   "Nice!", "Great job!", "Crushing it!", "Well done!", "Keep going!",
   "You did it!", "Strong work!", "On a roll!", "Yes!", "Locked in!",
+  "Boom!", "That's it!", "Way to go!", "Solid!", "Nailed it!",
+  "Love that!", "Momentum!", "Let's go!", "Killing it!", "Stacking wins!",
+  "Proud of you!", "Level up!", "Unstoppable!",
 ];
 
 // Fragments scattered across a habit card's own footprint (relX/relY as 0-1
@@ -150,6 +153,53 @@ const SPARK_PARTICLES = [
   { dx: 0, dy: -24 },
   { dx: 0, dy: 22 },
 ];
+
+// --- Trophy celebration sound + haptics (synthesized, no audio files needed) ---
+function playTone(ctx, freq, startTime, duration, gainPeak, type) {
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || "triangle";
+    osc.frequency.setValueAtTime(freq, startTime);
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(gainPeak, startTime + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(startTime);
+    osc.stop(startTime + duration + 0.03);
+  } catch (e) {
+    // audio isn't essential — fail silently
+  }
+}
+
+// A short rising click for each of the 3 taps while cracking the lock,
+// pitching up each time so the buildup itself feels like it's escalating
+function playTapTick(ctx, tapIndex) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  playTone(ctx, 260 + tapIndex * 90, now, 0.09, 0.1, "square");
+}
+
+// A bright ascending arpeggio into a shimmering top note — reads as a small
+// triumphant fanfare for the trophy reveal
+function playTrophyFanfare(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+  notes.forEach((freq, i) => {
+    playTone(ctx, freq, now + i * 0.085, 0.5, 0.15, "triangle");
+  });
+  playTone(ctx, 1567.98, now + 0.3, 0.65, 0.07, "sine"); // shimmering G6 on top
+}
+
+function triggerHaptics(pattern) {
+  try {
+    if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(pattern);
+  } catch (e) {
+    // haptics aren't essential — fail silently
+  }
+}
 
 const PERIODS = [
   { key: "daily", label: "Daily", days: 1 },
@@ -230,6 +280,16 @@ function isVisibleOn(habit, dateStr) {
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
   if (habit.frequency?.type === "once") return isScheduledOn(habit, dateStr);
   return true;
+}
+
+// Percentage math needs a stricter check than list visibility: a "specific
+// days" habit (e.g. gym on Mon/Tue) still shows in the list every day so it
+// can be logged off-schedule, but it should only pull weight in that day's
+// completion percentage on the days it's actually scheduled for — its
+// done/not-done state on any other day shouldn't move the number at all.
+function countsTowardPercentOn(habit, dateStr) {
+  if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
+  return isScheduledOn(habit, dateStr);
 }
 
 const ACHIEVEMENT_LEVELS = [
@@ -701,7 +761,7 @@ function buildTrendSeries(habits, records, today) {
       Object.entries(rec).forEach(([hid, val]) => {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
-        if (!isVisibleOn(hb, ds)) return;
+        if (!countsTowardPercentOn(hb, ds)) return;
         total += hb.difficulty;
         if (val) done += hb.difficulty;
       });
@@ -870,6 +930,22 @@ export default function HabitTracker() {
   const [completeHabitConfirm, setCompleteHabitConfirm] = useState(null); // habit pending "mark completed" confirmation
 
   const pressRef = useRef({ timer: null, longPressed: false });
+  const audioCtxRef = useRef(null);
+
+  function getAudioContext() {
+    if (!audioCtxRef.current) {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) audioCtxRef.current = new Ctx();
+      } catch (e) {
+        audioCtxRef.current = null;
+      }
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume().catch(() => {});
+    }
+    return audioCtxRef.current;
+  }
 
   useEffect(() => {
     load();
@@ -1157,19 +1233,35 @@ export default function HabitTracker() {
     }
   };
 
-  const handleLockTap = () => {
-    setTrophyUnlock((prev) => {
-      if (!prev || prev.phase !== "tap") return prev;
-      const newTaps = prev.taps + 1;
-      if (newTaps >= 3) {
+  // Trophy reveal now plays entirely on its own — no tapping required. It
+  // still auto-"cracks" in 3 escalating beats (same sound/haptic/visual
+  // language as before) purely for dramatic buildup, then reveals.
+  useEffect(() => {
+    if (!trophyUnlock || trophyUnlock.phase !== "tap") return;
+    const ctx = getAudioContext();
+    const timers = [];
+    [1, 2, 3].forEach((tapNum, idx) => {
+      timers.push(
         setTimeout(() => {
-          setTrophyUnlock((p) => (p ? { ...p, phase: "celebrate" } : p));
-          setTimeout(() => setTrophyUnlock(null), 3400);
-        }, 500);
-      }
-      return { ...prev, taps: newTaps, tapKey: prev.tapKey + 1 };
+          playTapTick(ctx, tapNum - 1);
+          triggerHaptics(tapNum >= 3 ? [20] : [12]);
+          setTrophyUnlock((p) => (p && p.phase === "tap" ? { ...p, taps: tapNum, tapKey: p.tapKey + 1 } : p));
+          if (tapNum >= 3) {
+            timers.push(
+              setTimeout(() => {
+                setTrophyUnlock((p) => (p ? { ...p, phase: "celebrate" } : p));
+                playTrophyFanfare(ctx);
+                triggerHaptics([30, 40, 30, 40, 110]);
+                timers.push(setTimeout(() => setTrophyUnlock(null), 3400));
+              }, 420)
+            );
+          }
+        }, 280 + idx * 280)
+      );
     });
-  };
+    return () => timers.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trophyUnlock?.id]);
 
   const remove = (habitId) => {
     const newHabits = habits.filter((h) => h.id !== habitId);
@@ -1631,7 +1723,7 @@ export default function HabitTracker() {
     Object.entries(rec).forEach(([hid, val]) => {
       const hb = habits.find((h) => String(h.id) === String(hid));
       if (!hb) return;
-      if (!isVisibleOn(hb, dateStr)) return;
+      if (!countsTowardPercentOn(hb, dateStr)) return;
       total += hb.difficulty;
       if (val) done += hb.difficulty;
     });
@@ -1910,18 +2002,41 @@ export default function HabitTracker() {
           50% { opacity: 0.7; transform: scale(1.05); }
         }
         .lock-ring-pulse { animation: lockRingPulse 1.8s ease-in-out infinite; }
-        @keyframes trophyFlash {
+        @keyframes finalTapCharge {
           0% { opacity: 0; }
-          12% { opacity: 0.65; }
+          45% { opacity: 0.85; }
           100% { opacity: 0; }
         }
-        .trophy-flash { animation: trophyFlash 0.55s ease-out forwards; }
+        .final-tap-charge { animation: finalTapCharge 0.5s ease-out forwards; }
+        @keyframes spotlightIn {
+          0% { opacity: 0; transform: translateX(-50%) scaleY(0.7); }
+          20% { opacity: 1; }
+          100% { opacity: 0.85; transform: translateX(-50%) scaleY(1); }
+        }
+        .spotlight-beam { animation: spotlightIn 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards; transform-origin: top center; }
+        @keyframes screenPunch {
+          0% { transform: scale(1); }
+          25% { transform: scale(1.045); }
+          100% { transform: scale(1); }
+        }
+        .screen-punch { animation: screenPunch 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+        @keyframes impactRing {
+          0% { width: 20px; height: 20px; opacity: 1; border-width: 7px; }
+          100% { width: 280px; height: 280px; opacity: 0; border-width: 0px; }
+        }
+        .impact-ring { animation: impactRing 0.42s cubic-bezier(0.11, 0.85, 0.32, 1) forwards; }
+        @keyframes trophyFlash {
+          0% { opacity: 0; }
+          12% { opacity: 0.78; }
+          100% { opacity: 0; }
+        }
+        .trophy-flash { animation: trophyFlash 0.6s ease-out forwards; }
         @keyframes rayRotate {
           0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 0; }
-          15% { opacity: 0.55; }
-          100% { transform: translate(-50%, -50%) rotate(220deg); opacity: 0.4; }
+          10% { opacity: 0.55; }
+          100% { transform: translate(-50%, -50%) rotate(360deg); opacity: 0.5; }
         }
-        .trophy-rays { animation: rayRotate 3.2s ease-out forwards; }
+        .trophy-rays { animation: rayRotate 7s linear infinite; }
         @keyframes badgeShake {
           0%, 100% { transform: translate(0, 0) rotate(0deg); }
           20% { transform: translate(-4px, 2px) rotate(-4deg); }
@@ -1964,9 +2079,30 @@ export default function HabitTracker() {
         }
         @keyframes glowRing {
           0% { width: 16px; height: 16px; opacity: 1; border-width: 5px; }
-          100% { width: 300px; height: 300px; opacity: 0; border-width: 1px; }
+          100% { width: 360px; height: 360px; opacity: 0; border-width: 1px; }
         }
-        .glow-ring { animation: glowRing 1.3s ease-out forwards; }
+        .glow-ring { animation: glowRing 1.45s ease-out forwards; }
+        @keyframes badgeGlowPulse {
+          0%, 100% { box-shadow: 0 0 60px var(--glow-c); }
+          50% { box-shadow: 0 0 92px var(--glow-c); }
+        }
+        .badge-glow-pulse { animation: badgeGlowPulse 1.8s 1.1s ease-in-out infinite; }
+        @keyframes shimmerSweep {
+          0%, 55% { transform: translateX(-140%) rotate(22deg); opacity: 0; }
+          64% { opacity: 0.9; }
+          82% { opacity: 0; }
+          100% { transform: translateX(140%) rotate(22deg); opacity: 0; }
+        }
+        .shimmer-sweep {
+          position: absolute;
+          top: -30%;
+          left: 45%;
+          width: 18%;
+          height: 160%;
+          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent);
+          animation: shimmerSweep 2.2s 0.85s ease-in-out infinite;
+          pointer-events: none;
+        }
         @keyframes trophyTextIn {
           0% { opacity: 0; transform: translateY(14px); }
           100% { opacity: 1; transform: translateY(0); }
@@ -1978,9 +2114,15 @@ export default function HabitTracker() {
           100% { transform: scale(1); opacity: 1; }
         }
         .level-pop { animation: levelPop 0.5s 0.58s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+        @keyframes trophyParticleFall {
+          0% { transform: translate(0, 0) rotate(0deg) scale(0.4); opacity: 1; }
+          40% { opacity: 1; }
+          62% { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(1); opacity: 1; }
+          100% { transform: translate(calc(var(--dx) * 1.08), calc(var(--dy) + 74px)) rotate(calc(var(--rot) + 100deg)) scale(0.22); opacity: 0; }
+        }
         .trophy-particle {
           position: fixed;
-          animation: burstParticle 1.1s cubic-bezier(0.15, 0.7, 0.25, 1) forwards;
+          animation: trophyParticleFall 1.35s cubic-bezier(0.15, 0.7, 0.25, 1) forwards;
         }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
@@ -3781,16 +3923,15 @@ export default function HabitTracker() {
           );
         })()}
 
-      {/* Trophy unlock celebration */}
+      {/* Trophy unlock celebration — plays automatically, no interaction needed */}
       {trophyUnlock && (
         <div
           key={trophyUnlock.id}
-          onClick={handleLockTap}
-          className="trophy-backdrop"
+          className={`trophy-backdrop ${trophyUnlock.phase === "celebrate" ? "screen-punch" : ""}`}
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.8)",
+            background: "radial-gradient(circle at 50% 42%, rgba(0,0,0,0.68) 0%, rgba(0,0,0,0.86) 55%, rgba(0,0,0,0.96) 100%)",
             zIndex: 80,
             display: "flex",
             flexDirection: "column",
@@ -3801,6 +3942,13 @@ export default function HabitTracker() {
         >
           {trophyUnlock.phase === "tap" && (
             <>
+              {trophyUnlock.taps >= 3 && (
+                <div
+                  key="final-charge"
+                  className="final-tap-charge"
+                  style={{ position: "absolute", inset: 0, background: "#FFFFFF", pointerEvents: "none" }}
+                />
+              )}
               <div
                 className="lock-ring-pulse"
                 style={{
@@ -3816,9 +3964,10 @@ export default function HabitTracker() {
                 }}
               />
               <div style={{ position: "relative", width: "140px", height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <button
+                <div
                   key={trophyUnlock.tapKey}
-                  aria-label="Tap anywhere to crack the lock"
+                  role="img"
+                  aria-label="Unlocking your reward"
                   className="tap-bounce"
                   style={{
                     position: "relative",
@@ -3870,12 +4019,12 @@ export default function HabitTracker() {
                       ))}
                     </div>
                   )}
-                </button>
+                </div>
               </div>
 
               <div className="text-center mt-7 px-8">
                 <div className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-                  Tap anywhere to unlock your reward
+                  Unlocking your reward...
                 </div>
                 <div className="flex items-center justify-center gap-2 mt-3">
                   {[0, 1, 2].map((i) => (
@@ -3898,6 +4047,21 @@ export default function HabitTracker() {
           {trophyUnlock.phase === "celebrate" && (
             <>
           <div
+            className="spotlight-beam"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: "50%",
+              width: "260px",
+              height: "60vh",
+              background: `linear-gradient(180deg, ${hexToRgba(trophyUnlock.level.color, 0.5)} 0%, ${hexToRgba(trophyUnlock.level.color, 0.12)} 55%, transparent 100%)`,
+              clipPath: "polygon(38% 0%, 62% 0%, 100% 100%, 0% 100%)",
+              transform: "translateX(-50%)",
+              pointerEvents: "none",
+            }}
+          />
+
+          <div
             className="trophy-flash"
             style={{
               position: "absolute",
@@ -3913,8 +4077,8 @@ export default function HabitTracker() {
               position: "absolute",
               top: "42%",
               left: "50%",
-              width: "420px",
-              height: "420px",
+              width: "480px",
+              height: "480px",
               background: `repeating-conic-gradient(${hexToRgba(trophyUnlock.level.color, 0.35)} 0deg 8deg, transparent 8deg 24deg)`,
               borderRadius: "999px",
               pointerEvents: "none",
@@ -3932,8 +4096,8 @@ export default function HabitTracker() {
                   background: trophyUnlock.level.color,
                   borderRadius: p.shape === "square" ? "3px" : "999px",
                   animationDelay: `${0.35 + p.delay}s`,
-                  "--dx": `${p.dx * 1.7}px`,
-                  "--dy": `${p.dy * 1.7}px`,
+                  "--dx": `${p.dx * 1.9}px`,
+                  "--dy": `${p.dy * 1.9}px`,
                   "--rot": `${p.rot}deg`,
                 }}
               />
@@ -3948,15 +4112,35 @@ export default function HabitTracker() {
                   background: "#FFFFFF",
                   borderRadius: p.shape === "square" ? "3px" : "999px",
                   animationDelay: `${0.55 + p.delay * 1.3}s`,
-                  "--dx": `${p.dx * 2.6}px`,
-                  "--dy": `${p.dy * 2.6}px`,
+                  "--dx": `${p.dx * 3}px`,
+                  "--dy": `${p.dy * 3}px`,
                   "--rot": `${p.rot * 1.5}deg`,
+                }}
+              />
+            ))}
+            {BURST_PARTICLES.map((p, i) => (
+              <div
+                key={`w3-${i}`}
+                className="trophy-particle"
+                style={{
+                  width: `${p.size + 1}px`,
+                  height: `${p.size + 1}px`,
+                  background: YELLOW,
+                  borderRadius: p.shape === "square" ? "3px" : "999px",
+                  animationDelay: `${0.44 + p.delay * 1.15}s`,
+                  "--dx": `${p.dx * 2.4}px`,
+                  "--dy": `${p.dy * 2.4}px`,
+                  "--rot": `${p.rot * -1.2}deg`,
                 }}
               />
             ))}
           </div>
 
           <div style={{ position: "relative", width: "140px", height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div
+              className="impact-ring"
+              style={{ position: "absolute", borderRadius: "999px", border: "7px solid #FFFFFF" }}
+            />
             <div
               className="glow-ring"
               style={{ position: "absolute", borderRadius: "999px", border: `4px solid ${trophyUnlock.level.color}` }}
@@ -3982,25 +4166,30 @@ export default function HabitTracker() {
 
             <div className="badge-shake">
               <div
-                className="trophy-badge-in"
+                className="trophy-badge-in badge-glow-pulse"
                 style={{
-                  width: "112px",
-                  height: "112px",
+                  position: "relative",
+                  overflow: "hidden",
+                  width: "124px",
+                  height: "124px",
                   borderRadius: "999px",
-                  background: hexToRgba(trophyUnlock.level.color, 0.2),
+                  backgroundColor: hexToRgba(trophyUnlock.level.color, 0.2),
+                  backgroundImage: `radial-gradient(circle at 35% 28%, ${hexToRgba(trophyUnlock.level.color, 0.4)}, ${hexToRgba(trophyUnlock.level.color, 0.15)} 70%)`,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   boxShadow: `0 0 60px ${hexToRgba(trophyUnlock.level.color, 0.7)}`,
+                  "--glow-c": hexToRgba(trophyUnlock.level.color, 0.75),
                 }}
               >
-                <div style={{ position: "relative", width: "56px", height: "56px", perspective: "300px" }}>
+                <div className="shimmer-sweep" />
+                <div style={{ position: "relative", width: "62px", height: "62px", perspective: "300px" }}>
                   <div className="coin-flip" style={{ position: "relative", width: "100%", height: "100%", transformStyle: "preserve-3d" }}>
                     <div className="badge-face">
-                      <Lock size={38} color="#6E6E6A" />
+                      <Lock size={40} color="#6E6E6A" />
                     </div>
                     <div className="badge-face badge-face-back">
-                      <Trophy size={46} color={trophyUnlock.level.color} />
+                      <Trophy size={52} color={trophyUnlock.level.color} />
                     </div>
                   </div>
                   <div style={{ position: "absolute", top: "50%", left: "50%", width: 0, height: 0, pointerEvents: "none" }}>
@@ -4026,13 +4215,20 @@ export default function HabitTracker() {
           </div>
 
           <div className="trophy-text-in text-center mt-7 px-8" style={{ position: "relative" }}>
-            <div className="mono text-xs" style={{ color: "#8A8A85", letterSpacing: "2px" }}>
+            <div className="mono text-xs" style={{ color: "#8A8A85", letterSpacing: "3px" }}>
               TROPHY UNLOCKED
             </div>
-            <div className="level-pop text-2xl mt-1" style={{ color: trophyUnlock.level.color, fontWeight: 700 }}>
+            <div
+              className="level-pop text-3xl mt-1"
+              style={{
+                color: trophyUnlock.level.color,
+                fontWeight: 700,
+                textShadow: `0 0 26px ${hexToRgba(trophyUnlock.level.color, 0.75)}`,
+              }}
+            >
               {trophyUnlock.level.label}
             </div>
-            <div className="text-sm mt-1" style={{ color: "#EDEDEA" }}>
+            <div className="text-sm mt-1.5" style={{ color: "#EDEDEA" }}>
               {trophyUnlock.habit.name} — {trophyUnlock.level.threshold} days
             </div>
           </div>
