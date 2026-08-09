@@ -55,6 +55,7 @@ const PERCENT_KEY = "percent-records";
 const NOTES_KEY = "day-notes";
 const QUANTITY_KEY = "quantity-records";
 const MILESTONES_KEY = "milestone-completions";
+const MILESTONE_TARGETS_KEY = "milestone-daily-targets";
 const WEEKS_COMPACT = 26;
 const WEEKS_DETAIL = 52;
 const LONG_PRESS_MS = 550;
@@ -290,6 +291,25 @@ function isVisibleOn(habit, dateStr) {
 function countsTowardPercentOn(habit, dateStr) {
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
   return isScheduledOn(habit, dateStr);
+}
+
+// A milestone-type habit only contributes to a day's percentage once the
+// user has set a daily goal for that date (a specific set of milestone IDs
+// they're aiming to finish that day) — otherwise it's excluded entirely,
+// same spirit as countsTowardPercentOn. Its contribution is partial credit:
+// how many of that day's targeted milestones were actually marked done on
+// or before that date (milestone completion values are date-stamped, e.g.
+// "2026-08-09", not just true/false, so this stays accurate for past days).
+function milestoneDayContribution(habit, dateStr, milestoneTargets, milestoneCompletions) {
+  const targetIds = milestoneTargets?.[dateStr]?.[habit.id];
+  if (!targetIds || targetIds.length === 0) return null;
+  const doneMap = milestoneCompletions[habit.id] || {};
+  let done = 0;
+  targetIds.forEach((mid) => {
+    const val = doneMap[mid];
+    if (val === true || (typeof val === "string" && val <= dateStr)) done++;
+  });
+  return { total: targetIds.length, done };
 }
 
 const ACHIEVEMENT_LEVELS = [
@@ -729,7 +749,7 @@ function Heatmap({
 // have any signal for (first habit created, or first record on file —
 // whichever is earlier) through today. This feeds the continuous trend
 // graph, so it naturally grows as the user's history grows.
-function buildTrendSeries(habits, records, today) {
+function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions) {
   const candidateDates = [];
   habits.forEach((h) => {
     if (h.createdAt) candidateDates.push(fmt(new Date(h.createdAt)));
@@ -754,10 +774,9 @@ function buildTrendSeries(habits, records, today) {
   while (cursor <= todayDate) {
     const ds = fmt(cursor);
     const rec = records[ds];
-    let pct = null;
+    let total = 0;
+    let done = 0;
     if (rec) {
-      let total = 0;
-      let done = 0;
       Object.entries(rec).forEach(([hid, val]) => {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
@@ -765,8 +784,16 @@ function buildTrendSeries(habits, records, today) {
         total += hb.difficulty;
         if (val) done += hb.difficulty;
       });
-      pct = total === 0 ? null : Math.round((done / total) * 100);
     }
+    habits.forEach((hb) => {
+      if (hb.frequency?.type !== "milestone") return;
+      if (hb.completed && hb.completedDate && ds > hb.completedDate) return;
+      const contribution = milestoneDayContribution(hb, ds, milestoneTargets, milestoneCompletions);
+      if (!contribution || contribution.total === 0) return;
+      total += hb.difficulty;
+      done += hb.difficulty * (contribution.done / contribution.total);
+    });
+    const pct = total === 0 ? null : Math.round((done / total) * 100);
     series.push({ date: ds, pct });
     cursor.setDate(cursor.getDate() + 1);
   }
@@ -873,6 +900,14 @@ export default function HabitTracker() {
   const [notes, setNotes] = useState({});
   const [quantityRecords, setQuantityRecords] = useState({});
   const [milestoneCompletions, setMilestoneCompletions] = useState({});
+  // { [dateStr]: { [habitId]: [milestoneId, ...] } } — which milestones the
+  // user targeted to complete on a given day, for a milestone-type habit.
+  const [milestoneTargets, setMilestoneTargets] = useState({});
+  // Queue of milestone habits still needing today's goal set, shown one at a
+  // time; [{ habit }] — first entry is the one currently prompted.
+  const [milestoneGoalQueue, setMilestoneGoalQueue] = useState([]);
+  const [goalFromId, setGoalFromId] = useState(null);
+  const [goalToId, setGoalToId] = useState(null);
   const [statsHabit, setStatsHabit] = useState(null);
   const [noteModalHabit, setNoteModalHabit] = useState(null);
   const [noteInputValue, setNoteInputValue] = useState("");
@@ -984,6 +1019,11 @@ export default function HabitTracker() {
       const mRes = await window.storage.get(MILESTONES_KEY, false);
       if (mRes) m = JSON.parse(mRes.value);
     } catch (e) {}
+    let mt = {};
+    try {
+      const mtRes = await window.storage.get(MILESTONE_TARGETS_KEY, false);
+      if (mtRes) mt = JSON.parse(mtRes.value);
+    } catch (e) {}
 
     const todayRecord = { ...(r[today] || {}) };
     h.forEach((hb) => {
@@ -999,7 +1039,23 @@ export default function HabitTracker() {
     setNotes(n);
     setQuantityRecords(q);
     setMilestoneCompletions(m);
+    setMilestoneTargets(mt);
     setLoading(false);
+
+    // Any milestone habit that still has milestones left, and doesn't have
+    // today's goal set yet, gets queued to ask "which ones today?"
+    const needsGoal = h.filter((hb) => {
+      if (hb.frequency?.type !== "milestone") return false;
+      if (hb.completed) return false;
+      const msList = hb.milestones || [];
+      if (msList.length === 0) return false;
+      const doneMap = m[hb.id] || {};
+      const allDone = msList.every((ms) => !!doneMap[ms.id]);
+      if (allDone) return false;
+      const todaysTarget = mt[today]?.[hb.id];
+      return !todaysTarget || todaysTarget.length === 0;
+    });
+    if (needsGoal.length > 0) setMilestoneGoalQueue(needsGoal.map((hb) => ({ habit: hb })));
 
     try {
       await window.storage.set(HABITS_KEY, JSON.stringify(h), false);
@@ -1060,6 +1116,15 @@ export default function HabitTracker() {
       await window.storage.set(MILESTONES_KEY, JSON.stringify(newCompletions), false);
     } catch (e) {
       console.error("Failed to save milestone completions:", e);
+    }
+  }
+
+  async function persistMilestoneTargets(newTargets) {
+    setMilestoneTargets(newTargets);
+    try {
+      await window.storage.set(MILESTONE_TARGETS_KEY, JSON.stringify(newTargets), false);
+    } catch (e) {
+      console.error("Failed to save milestone targets:", e);
     }
   }
 
@@ -1130,6 +1195,40 @@ export default function HabitTracker() {
     return () => clearInterval(intervalId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [habits, milestoneCompletions]);
+
+  // Drop any queued "set today's goal" prompt whose habit has since been
+  // completed/archived or has no incomplete milestones left — otherwise a
+  // stale entry could sit at the front of the queue forever.
+  useEffect(() => {
+    if (milestoneGoalQueue.length === 0) return;
+    const head = milestoneGoalQueue[0];
+    const liveHabit = habits.find((h) => h.id === head.habit.id);
+    if (!liveHabit || liveHabit.completed) {
+      setMilestoneGoalQueue((q) => q.slice(1));
+      return;
+    }
+    const doneMap = milestoneCompletions[liveHabit.id] || {};
+    const incomplete = (liveHabit.milestones || []).filter((m) => !doneMap[m.id]);
+    if (incomplete.length === 0) {
+      setMilestoneGoalQueue((q) => q.slice(1));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [milestoneGoalQueue, habits, milestoneCompletions]);
+
+  // Reset the From/To range picker defaults whenever a new habit reaches
+  // the front of the goal queue.
+  useEffect(() => {
+    const head = milestoneGoalQueue[0];
+    if (!head) return;
+    const liveHabit = habits.find((h) => h.id === head.habit.id) || head.habit;
+    const doneMap = milestoneCompletions[liveHabit.id] || {};
+    const incomplete = (liveHabit.milestones || []).filter((m) => !doneMap[m.id]);
+    if (incomplete.length > 0) {
+      setGoalFromId(String(incomplete[0].id));
+      setGoalToId(String(incomplete[0].id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [milestoneGoalQueue[0]?.habit?.id]);
 
   function computeMilestoneCompletedCount(habit) {
     const done = milestoneCompletions[habit.id] || {};
@@ -1416,6 +1515,9 @@ export default function HabitTracker() {
         setPercentPromptStep("ask");
         setPercentInputValue("");
         setPercentPrompt({ habit: newHabit });
+      }
+      if (frequency.type === "milestone" && milestones.length > 0) {
+        setMilestoneGoalQueue((q) => [...q, { habit: newHabit }]);
       }
     }
   };
@@ -1717,15 +1819,24 @@ export default function HabitTracker() {
 
   function dayPct(dateStr) {
     const rec = records[dateStr];
-    if (!rec) return null;
     let total = 0;
     let done = 0;
-    Object.entries(rec).forEach(([hid, val]) => {
-      const hb = habits.find((h) => String(h.id) === String(hid));
-      if (!hb) return;
-      if (!countsTowardPercentOn(hb, dateStr)) return;
+    if (rec) {
+      Object.entries(rec).forEach(([hid, val]) => {
+        const hb = habits.find((h) => String(h.id) === String(hid));
+        if (!hb) return;
+        if (!countsTowardPercentOn(hb, dateStr)) return;
+        total += hb.difficulty;
+        if (val) done += hb.difficulty;
+      });
+    }
+    habits.forEach((hb) => {
+      if (hb.frequency?.type !== "milestone") return;
+      if (hb.completed && hb.completedDate && dateStr > hb.completedDate) return;
+      const contribution = milestoneDayContribution(hb, dateStr, milestoneTargets, milestoneCompletions);
+      if (!contribution || contribution.total === 0) return;
       total += hb.difficulty;
-      if (val) done += hb.difficulty;
+      done += hb.difficulty * (contribution.done / contribution.total);
     });
     if (total === 0) return null;
     return Math.round((done / total) * 100);
@@ -2482,18 +2593,63 @@ export default function HabitTracker() {
                       </span>
                       <div className="flex items-center gap-2 shrink-0">
                         {isMilestoneHabit ? (
-                          <div
-                            className="rounded-full px-3 py-1.5 mono text-xs"
-                            style={{
-                              backgroundImage: `linear-gradient(135deg, ${hexToRgba(h.color, 0.24)}, ${hexToRgba(h.color, 0.08)})`,
-                              border: `1px solid ${h.color}`,
-                              boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.15)} inset`,
-                              color: h.color,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {computeMilestoneCompletedCount(h)}/{(h.milestones || []).length}
-                          </div>
+                          (() => {
+                            const totalMilestones = (h.milestones || []).length;
+                            const completedCount = computeMilestoneCompletedCount(h);
+                            const allDone = totalMilestones > 0 && completedCount === totalMilestones;
+                            const todayTargetIds = milestoneTargets[today]?.[h.id];
+                            const doneMap = milestoneCompletions[h.id] || {};
+
+                            if (!allDone && (!todayTargetIds || todayTargetIds.length === 0)) {
+                              return (
+                                <button
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onPointerUp={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setMilestoneGoalQueue((q) =>
+                                      q.some((it) => it.habit.id === h.id) ? q : [{ habit: h }, ...q]
+                                    );
+                                  }}
+                                  className="rounded-full px-3 py-1.5 mono text-xs"
+                                  style={{
+                                    backgroundImage: `linear-gradient(135deg, ${hexToRgba(YELLOW, 0.24)}, ${hexToRgba(YELLOW, 0.08)})`,
+                                    border: `1px solid ${YELLOW}`,
+                                    boxShadow: `0 0 0 1px ${hexToRgba(YELLOW, 0.15)} inset`,
+                                    color: YELLOW,
+                                    fontWeight: 600,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  Set today's goal
+                                </button>
+                              );
+                            }
+
+                            const badgeLabel =
+                              !allDone && todayTargetIds && todayTargetIds.length > 0
+                                ? `${todayTargetIds.filter((mid) => {
+                                    const val = doneMap[mid];
+                                    return val === true || (typeof val === "string" && val <= today);
+                                  }).length}/${todayTargetIds.length} today`
+                                : `${completedCount}/${totalMilestones}`;
+
+                            return (
+                              <div
+                                className="rounded-full px-3 py-1.5 mono text-xs"
+                                style={{
+                                  backgroundImage: `linear-gradient(135deg, ${hexToRgba(h.color, 0.24)}, ${hexToRgba(h.color, 0.08)})`,
+                                  border: `1px solid ${h.color}`,
+                                  boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.15)} inset`,
+                                  color: h.color,
+                                  fontWeight: 600,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {badgeLabel}
+                              </div>
+                            );
+                          })()
                         ) : (
                           <>
                             {h.usesPercentage && (
@@ -3209,6 +3365,38 @@ export default function HabitTracker() {
                         ? "Completed"
                         : "Not completed yet"}
                     </div>
+                    {isMilestoneHabit &&
+                      !h.completed &&
+                      milestoneCompletedCount < (h.milestones || []).length &&
+                      (() => {
+                        const todayTargetIds = milestoneTargets[today]?.[h.id];
+                        const doneMap = milestoneCompletions[h.id] || {};
+                        if (!todayTargetIds || todayTargetIds.length === 0) {
+                          return (
+                            <button
+                              onClick={() =>
+                                setMilestoneGoalQueue((q) => (q.some((it) => it.habit.id === h.id) ? q : [{ habit: h }, ...q]))
+                              }
+                              className="rounded-full px-4 py-1.5 text-sm"
+                              style={{ background: hexToRgba(YELLOW, 0.18), border: `1px solid ${YELLOW}`, color: YELLOW, fontWeight: 600 }}
+                            >
+                              Set today's goal
+                            </button>
+                          );
+                        }
+                        const doneToday = todayTargetIds.filter((mid) => {
+                          const val = doneMap[mid];
+                          return val === true || (typeof val === "string" && val <= today);
+                        }).length;
+                        return (
+                          <div
+                            className="rounded-full px-4 py-1.5 text-sm"
+                            style={{ background: hexToRgba(h.color, 0.22), border: `1px solid ${h.color}`, color: h.color, fontWeight: 600 }}
+                          >
+                            {doneToday}/{todayTargetIds.length} today's goal
+                          </div>
+                        );
+                      })()}
                     <div
                       className="flex items-center gap-1.5 rounded-full px-3 py-1.5"
                       style={{ background: "#0D0D0D", border: `1px solid ${unlockedCount > 0 ? YELLOW : "#242422"}` }}
@@ -4416,6 +4604,125 @@ export default function HabitTracker() {
         </div>
       )}
 
+      {/* Set today's milestone goal — one habit at a time from the queue */}
+      {milestoneGoalQueue.length > 0 &&
+        (() => {
+          const head = milestoneGoalQueue[0];
+          const habit = habits.find((h) => h.id === head.habit.id) || head.habit;
+          const doneMap = milestoneCompletions[habit.id] || {};
+          const incomplete = (habit.milestones || []).filter((m) => !doneMap[m.id]);
+          if (incomplete.length === 0) return null; // cleanup effect will drop this shortly
+
+          const fromIdx = Math.max(0, incomplete.findIndex((m) => String(m.id) === goalFromId));
+          const toIdx = Math.max(0, incomplete.findIndex((m) => String(m.id) === goalToId));
+          const lo = Math.min(fromIdx, toIdx);
+          const hi = Math.max(fromIdx, toIdx);
+          const selected = incomplete.slice(lo, hi + 1);
+
+          const skipGoal = () => setMilestoneGoalQueue((q) => q.slice(1));
+          const confirmGoal = () => {
+            const dayTargets = { ...(milestoneTargets[today] || {}), [habit.id]: selected.map((m) => m.id) };
+            persistMilestoneTargets({ ...milestoneTargets, [today]: dayTargets });
+            setMilestoneGoalQueue((q) => q.slice(1));
+          };
+
+          return (
+            <div
+              onClick={skipGoal}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.65)",
+                zIndex: 60,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "24px",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="modal-pop"
+                style={{
+                  background: "#0D0D0D",
+                  border: "1px solid #242422",
+                  borderRadius: "14px",
+                  padding: "20px",
+                  width: "100%",
+                  maxWidth: "360px",
+                }}
+              >
+                <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                  Today's goal for "{habit.name}"
+                </div>
+                <div className="text-xs mb-4" style={{ color: "#8A8A85" }}>
+                  Which milestones do you want to complete today? Pick a range from your {incomplete.length}{" "}
+                  remaining milestone{incomplete.length === 1 ? "" : "s"}.
+                </div>
+
+                <div className="flex gap-2 mb-3">
+                  <div className="flex-1">
+                    <div className="text-xs mb-1" style={{ color: "#6E6E6A" }}>
+                      From
+                    </div>
+                    <select
+                      value={goalFromId ?? ""}
+                      onChange={(e) => setGoalFromId(e.target.value)}
+                      className="w-full rounded-lg px-2 py-2 text-xs"
+                      style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                    >
+                      {incomplete.map((m, i) => (
+                        <option key={m.id} value={String(m.id)}>
+                          {i + 1}. {m.text}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-xs mb-1" style={{ color: "#6E6E6A" }}>
+                      To
+                    </div>
+                    <select
+                      value={goalToId ?? ""}
+                      onChange={(e) => setGoalToId(e.target.value)}
+                      className="w-full rounded-lg px-2 py-2 text-xs"
+                      style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                    >
+                      {incomplete.map((m, i) => (
+                        <option key={m.id} value={String(m.id)}>
+                          {i + 1}. {m.text}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="text-xs mb-5" style={{ color: habit.color }}>
+                  {selected.length} milestone{selected.length === 1 ? "" : "s"} selected for today — this will count
+                  toward today's completion percentage.
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={skipGoal}
+                    className="flex-1 rounded-md py-2 text-sm"
+                    style={{ background: "transparent", border: "1px solid #3A3A35", color: "#EDEDEA" }}
+                  >
+                    Not today
+                  </button>
+                  <button
+                    onClick={confirmGoal}
+                    className="flex-1 rounded-md py-2 text-sm"
+                    style={{ background: habit.color, color: "#000000", fontWeight: 600 }}
+                  >
+                    Set goal
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
       {/* Edit percentage via the badge on the main list */}
       {percentEditHabit && (
         <div
@@ -4543,7 +4850,7 @@ export default function HabitTracker() {
       {/* Daily completion trend graph */}
       {showTrendGraph &&
         (() => {
-          const series = buildTrendSeries(habits, records, today);
+          const series = buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions);
           const todayDate = parseDate(today);
           const trackedDays = series.filter((pt) => pt.pct !== null).length;
           return (
