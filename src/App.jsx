@@ -56,6 +56,7 @@ const NOTES_KEY = "day-notes";
 const QUANTITY_KEY = "quantity-records";
 const MILESTONES_KEY = "milestone-completions";
 const MILESTONE_TARGETS_KEY = "milestone-daily-targets";
+const MILESTONE_TIMES_KEY = "milestone-completion-times";
 const WEEKS_COMPACT = 26;
 const WEEKS_DETAIL = 52;
 const LONG_PRESS_MS = 550;
@@ -174,6 +175,12 @@ const PERIODS = [
   { key: "monthly", label: "Monthly", days: 30 },
 ];
 
+const HABIT_CATEGORIES = [
+  "Health", "Fitness", "Productivity", "Mindfulness", "Learning",
+  "Finance", "Social", "Creativity", "Home", "Sleep", "Nutrition", "Career",
+];
+const UNCATEGORIZED = "Uncategorized";
+
 const COLORS = [
   "#5FCB6C", "#F2C94C", "#EE6C4D", "#E5484D", "#4EA8DE",
   "#9B5DE5", "#F15BB5", "#00BBF9", "#43AA8B", "#F3722C",
@@ -249,6 +256,12 @@ function isVisibleOn(habit, dateStr) {
   return true;
 }
 
+// Habits created before categories existed fall back to a single bucket so
+// they still show up somewhere in the switcher instead of vanishing.
+function habitCategory(habit) {
+  return habit.category || UNCATEGORIZED;
+}
+
 // Percentage math needs a stricter check than list visibility: a "specific
 // days" habit (e.g. gym on Mon/Tue) still shows in the list every day so it
 // can be logged off-schedule, but it should only pull weight in that day's
@@ -285,6 +298,18 @@ function milestoneDayContribution(habit, dateStr, milestoneTargets, milestoneCom
     if (val === true || (typeof val === "string" && val <= dateStr)) done++;
   });
   return { total: targetIds.length, done };
+}
+
+// A saved note is either a legacy plain string (no timestamp available) or
+// { text, time } once this feature landed. These two helpers read either
+// shape safely so old notes don't break.
+function getNoteText(val) {
+  if (!val) return "";
+  return typeof val === "string" ? val : val.text || "";
+}
+function getNoteTime(val) {
+  if (!val || typeof val === "string") return null;
+  return val.time || null;
 }
 
 const ACHIEVEMENT_LEVELS = [
@@ -724,7 +749,7 @@ function Heatmap({
 // have any signal for (first habit created, or first record on file —
 // whichever is earlier) through today. This feeds the continuous trend
 // graph, so it naturally grows as the user's history grows.
-function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions) {
+function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions, categoryFilter) {
   const candidateDates = [];
   habits.forEach((h) => {
     if (h.createdAt) candidateDates.push(fmt(new Date(h.createdAt)));
@@ -755,6 +780,7 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
       Object.entries(rec).forEach(([hid, val]) => {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
+        if (categoryFilter && categoryFilter !== "All" && habitCategory(hb) !== categoryFilter) return;
         if (!countsTowardPercentOn(hb, ds)) return;
         const w = habitWeight(hb);
         total += w;
@@ -763,6 +789,7 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
     }
     habits.forEach((hb) => {
       if (hb.frequency?.type !== "milestone") return;
+      if (categoryFilter && categoryFilter !== "All" && habitCategory(hb) !== categoryFilter) return;
       if (hb.completed && hb.completedDate && ds > hb.completedDate) return;
       const contribution = milestoneDayContribution(hb, ds, milestoneTargets, milestoneCompletions);
       if (!contribution || contribution.total === 0) return;
@@ -880,6 +907,7 @@ export default function HabitTracker() {
   // { [dateStr]: { [habitId]: [milestoneId, ...] } } — which milestones the
   // user targeted to complete on a given day, for a milestone-type habit.
   const [milestoneTargets, setMilestoneTargets] = useState({});
+  const [milestoneCompletionTimes, setMilestoneCompletionTimes] = useState({});
   // Queue of milestone habits still needing today's goal set, shown one at a
   // time; [{ habit }] — first entry is the one currently prompted.
   const [milestoneGoalQueue, setMilestoneGoalQueue] = useState([]);
@@ -891,6 +919,14 @@ export default function HabitTracker() {
   const [cameraNotice, setCameraNotice] = useState(false);
   const [period, setPeriod] = useState("weekly");
   const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedCategory, setSelectedCategory] = useState("All");
+
+  useEffect(() => {
+    if (selectedCategory === "All") return;
+    const stillExists = habits.some((h) => habitCategory(h) === selectedCategory);
+    if (!stillExists) setSelectedCategory("All");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingHabitId, setEditingHabitId] = useState(null);
@@ -898,6 +934,8 @@ export default function HabitTracker() {
   const [description, setDescription] = useState("");
   const [difficulty, setDifficulty] = useState(1);
   const [importance, setImportance] = useState(3);
+  const [category, setCategory] = useState("");
+  const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [icon, setIcon] = useState(DEFAULT_ICON);
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -1002,6 +1040,11 @@ export default function HabitTracker() {
       const mtRes = await window.storage.get(MILESTONE_TARGETS_KEY, false);
       if (mtRes) mt = JSON.parse(mtRes.value);
     } catch (e) {}
+    let mct = {};
+    try {
+      const mctRes = await window.storage.get(MILESTONE_TIMES_KEY, false);
+      if (mctRes) mct = JSON.parse(mctRes.value);
+    } catch (e) {}
 
     const todayRecord = { ...(r[today] || {}) };
     h.forEach((hb) => {
@@ -1018,6 +1061,7 @@ export default function HabitTracker() {
     setQuantityRecords(q);
     setMilestoneCompletions(m);
     setMilestoneTargets(mt);
+    setMilestoneCompletionTimes(mct);
     setLoading(false);
 
     // Any milestone habit that still has milestones left, and doesn't have
@@ -1103,6 +1147,15 @@ export default function HabitTracker() {
       await window.storage.set(MILESTONE_TARGETS_KEY, JSON.stringify(newTargets), false);
     } catch (e) {
       console.error("Failed to save milestone targets:", e);
+    }
+  }
+
+  async function persistMilestoneCompletionTimes(newTimes) {
+    setMilestoneCompletionTimes(newTimes);
+    try {
+      await window.storage.set(MILESTONE_TIMES_KEY, JSON.stringify(newTimes), false);
+    } catch (e) {
+      console.error("Failed to save milestone completion times:", e);
     }
   }
 
@@ -1227,6 +1280,14 @@ export default function HabitTracker() {
     const oldTotal = computeMilestoneCompletedCount(habit);
     habitDone[milestoneId] = willBeDone ? today : false;
     persistMilestoneCompletions({ ...milestoneCompletions, [habit.id]: habitDone });
+
+    const habitTimes = { ...(milestoneCompletionTimes[habit.id] || {}) };
+    if (willBeDone) {
+      habitTimes[milestoneId] = Date.now();
+    } else {
+      delete habitTimes[milestoneId];
+    }
+    persistMilestoneCompletionTimes({ ...milestoneCompletionTimes, [habit.id]: habitTimes });
 
     if (willBeDone) {
       const key = `${habit.id}-${milestoneId}`;
@@ -1359,6 +1420,8 @@ export default function HabitTracker() {
     setDescription("");
     setDifficulty(1);
     setImportance(3);
+    setCategory("");
+    setShowCustomCategoryInput(false);
     const { color: randColor, icon: randIcon } = pickRandomColorAndIcon();
     setColor(randColor);
     setIcon(randIcon);
@@ -1396,7 +1459,8 @@ export default function HabitTracker() {
 
   const addHabit = () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    const trimmedCategory = category.trim();
+    if (!trimmed || !trimmedCategory) return;
     const frequency =
       frequencyType === "everyday"
         ? { type: "everyday" }
@@ -1433,7 +1497,7 @@ export default function HabitTracker() {
     if (editingHabitId) {
       const newHabits = habits.map((h) =>
         h.id === editingHabitId
-          ? { ...h, name: trimmed, description: description.trim(), difficulty, importance, color, icon, frequency, reminder, quantityTracking, milestones }
+          ? { ...h, name: trimmed, description: description.trim(), difficulty, importance, category: trimmedCategory, color, icon, frequency, reminder, quantityTracking, milestones }
           : h
       );
       persistHabits(newHabits);
@@ -1455,6 +1519,7 @@ export default function HabitTracker() {
         description: description.trim(),
         difficulty,
         importance,
+        category: trimmedCategory,
         color,
         icon,
         frequency,
@@ -1501,6 +1566,8 @@ export default function HabitTracker() {
     setDescription(habit.description || "");
     setDifficulty(habit.difficulty);
     setImportance(habit.importance || 3);
+    setCategory(habit.category || "");
+    setShowCustomCategoryInput(false);
     setColor(habit.color);
     setIcon(habit.icon);
     setShowColorPicker(false);
@@ -1551,7 +1618,7 @@ export default function HabitTracker() {
   };
 
   const openNoteModal = (habit) => {
-    setNoteInputValue(notes[today]?.[habit.id] || "");
+    setNoteInputValue(getNoteText(notes[today]?.[habit.id]));
     setNoteModalHabit(habit);
   };
 
@@ -1560,7 +1627,7 @@ export default function HabitTracker() {
     const trimmed = noteInputValue.trim();
     const dayNotes = { ...(notes[today] || {}) };
     if (trimmed) {
-      dayNotes[noteModalHabit.id] = trimmed;
+      dayNotes[noteModalHabit.id] = { text: trimmed, time: Date.now() };
     } else {
       delete dayNotes[noteModalHabit.id];
     }
@@ -1734,7 +1801,7 @@ export default function HabitTracker() {
     });
     Object.entries(notes).forEach(([ds, dayNotes]) => {
       if (dayNotes && dayNotes[habit.id]) {
-        events.push({ kind: "note", date: ds, text: dayNotes[habit.id] });
+        events.push({ kind: "note", date: ds, text: getNoteText(dayNotes[habit.id]), time: getNoteTime(dayNotes[habit.id]) });
       }
     });
     events.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
@@ -1789,6 +1856,7 @@ export default function HabitTracker() {
       Object.entries(rec).forEach(([hid, val]) => {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
+        if (selectedCategory !== "All" && habitCategory(hb) !== selectedCategory) return;
         if (!countsTowardPercentOn(hb, dateStr)) return;
         const w = habitWeight(hb);
         total += w;
@@ -1797,6 +1865,7 @@ export default function HabitTracker() {
     }
     habits.forEach((hb) => {
       if (hb.frequency?.type !== "milestone") return;
+      if (selectedCategory !== "All" && habitCategory(hb) !== selectedCategory) return;
       if (hb.completed && hb.completedDate && dateStr > hb.completedDate) return;
       const contribution = milestoneDayContribution(hb, dateStr, milestoneTargets, milestoneCompletions);
       if (!contribution || contribution.total === 0) return;
@@ -1846,7 +1915,10 @@ export default function HabitTracker() {
   const avg = periodAverage();
   const selectedPct = dayPct(selectedDate);
   const selectedRecord = records[selectedDate] || {};
-  const visibleHabits = habits.filter((h) => isVisibleOn(h, selectedDate));
+  const categoriesInUse = Array.from(new Set(habits.map((h) => habitCategory(h)))).sort();
+  const visibleHabits = habits.filter(
+    (h) => isVisibleOn(h, selectedDate) && (selectedCategory === "All" || habitCategory(h) === selectedCategory)
+  );
   const selectedDoneCount = visibleHabits.filter((h) => !!selectedRecord[h.id]).length;
   const selectedTotalCount = visibleHabits.length;
   const selectedIsToday = selectedDate === today;
@@ -2227,6 +2299,42 @@ export default function HabitTracker() {
         <p className="text-sm mb-6" style={{ color: "#9A9A94" }}>
           Every habit is a layer. Harder ones sit deeper.
         </p>
+
+        {/* Category switcher */}
+        {categoriesInUse.length > 0 && (
+          <div className="hide-scrollbar flex gap-2 mb-6" style={{ overflowX: "auto" }}>
+            <button
+              onClick={() => setSelectedCategory("All")}
+              className="shrink-0 rounded-full px-3 py-1.5 text-xs mono"
+              style={{
+                background: selectedCategory === "All" ? ACCENT_GREEN : "#0D0D0D",
+                border: `1px solid ${selectedCategory === "All" ? ACCENT_GREEN : "#242422"}`,
+                color: selectedCategory === "All" ? "#000000" : "#EDEDEA",
+                fontWeight: selectedCategory === "All" ? 700 : 500,
+              }}
+            >
+              All
+            </button>
+            {categoriesInUse.map((cat) => {
+              const active = selectedCategory === cat;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className="shrink-0 rounded-full px-3 py-1.5 text-xs mono"
+                  style={{
+                    background: active ? ACCENT_GREEN : "#0D0D0D",
+                    border: `1px solid ${active ? ACCENT_GREEN : "#242422"}`,
+                    color: active ? "#000000" : "#EDEDEA",
+                    fontWeight: active ? 700 : 500,
+                  }}
+                >
+                  {cat}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* This week */}
         <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
@@ -2786,9 +2894,9 @@ export default function HabitTracker() {
               </span>
               <button
                 onClick={addHabit}
-                disabled={!name.trim()}
+                disabled={!name.trim() || !category.trim()}
                 className="flex items-center gap-1.5 text-sm"
-                style={{ color: name.trim() ? ACCENT_GREEN : "#4A4A47", fontWeight: 600 }}
+                style={{ color: name.trim() && category.trim() ? ACCENT_GREEN : "#4A4A47", fontWeight: 600 }}
               >
                 Save
                 <Check size={16} strokeWidth={3} />
@@ -2811,6 +2919,63 @@ export default function HabitTracker() {
               className="w-full rounded-lg px-4 py-3 text-sm mb-5"
               style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#EDEDEA" }}
             />
+
+            <div className="mb-5">
+              <div className="text-sm mb-2" style={{ color: "#EDEDEA", fontWeight: 500 }}>
+                Category <span style={{ color: "#E5484D" }}>*</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {HABIT_CATEGORIES.map((cat) => {
+                  const active = category === cat;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => {
+                        setCategory(cat);
+                        setShowCustomCategoryInput(false);
+                      }}
+                      className="rounded-full px-3 py-1.5 text-xs"
+                      style={{
+                        background: active ? ACCENT_GREEN : "#0D0D0D",
+                        border: `1px solid ${active ? ACCENT_GREEN : "#242422"}`,
+                        color: active ? "#000000" : "#EDEDEA",
+                        fontWeight: active ? 700 : 500,
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+                {(() => {
+                  const isCustomActive = !!category && !HABIT_CATEGORIES.includes(category);
+                  const active = showCustomCategoryInput || isCustomActive;
+                  return (
+                    <button
+                      onClick={() => setShowCustomCategoryInput((v) => !v)}
+                      className="rounded-full px-3 py-1.5 text-xs"
+                      style={{
+                        background: active ? ACCENT_GREEN : "#0D0D0D",
+                        border: `1px solid ${active ? ACCENT_GREEN : "#242422"}`,
+                        color: active ? "#000000" : "#EDEDEA",
+                        fontWeight: active ? 700 : 500,
+                      }}
+                    >
+                      Other…
+                    </button>
+                  );
+                })()}
+              </div>
+              {(showCustomCategoryInput || (!!category && !HABIT_CATEGORIES.includes(category))) && (
+                <input
+                  autoFocus={showCustomCategoryInput && !category}
+                  value={!HABIT_CATEGORIES.includes(category) ? category : ""}
+                  onChange={(e) => setCategory(e.target.value)}
+                  placeholder="Type a category name"
+                  className="w-full rounded-lg px-4 py-2.5 text-sm mt-2"
+                  style={{ background: "#0D0D0D", border: "1px solid #262622", color: "#EDEDEA" }}
+                />
+              )}
+            </div>
 
             <div className="flex gap-3 mb-3">
               <button
@@ -3278,6 +3443,12 @@ export default function HabitTracker() {
                   )}
                   <div className="flex items-center gap-2 mt-3 flex-wrap justify-center">
                     <div
+                      className="rounded-full px-3 py-1.5 text-xs mono"
+                      style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+                    >
+                      {habitCategory(h)}
+                    </div>
+                    <div
                       className="rounded-full px-4 py-1.5 text-sm"
                       style={{
                         background: (isMilestoneHabit ? milestoneCompletedCount > 0 : doneToday) ? hexToRgba(h.color, 0.22) : "#0D0D0D",
@@ -3587,6 +3758,11 @@ export default function HabitTracker() {
                             <div className="text-xs mt-1.5" style={{ color: hexToRgba(h.color, 0.8), marginLeft: "44px" }}>
                               Completed{" "}
                               {parseDate(doneVal).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                              {milestoneCompletionTimes[h.id]?.[m.id] &&
+                                ` at ${new Date(milestoneCompletionTimes[h.id][m.id]).toLocaleTimeString("default", {
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}`}
                             </div>
                           )}
                           {!isDone && m.deadline && (() => {
@@ -3620,16 +3796,21 @@ export default function HabitTracker() {
                             Notes
                           </div>
                           <div className="flex flex-col gap-2">
-                            {habitNotes.map(([ds, dayNotes]) => (
-                              <div key={ds} className="rounded-lg p-3" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                                <div className="text-xs mb-1" style={{ color: "#6E6E6A" }}>
-                                  {parseDate(ds).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                            {habitNotes.map(([ds, dayNotes]) => {
+                              const noteTime = getNoteTime(dayNotes[h.id]);
+                              return (
+                                <div key={ds} className="rounded-lg p-3" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                                  <div className="text-xs mb-1" style={{ color: "#6E6E6A" }}>
+                                    {parseDate(ds).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                                    {noteTime &&
+                                      ` at ${new Date(noteTime).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}`}
+                                  </div>
+                                  <div className="text-sm" style={{ color: "#EDEDEA" }}>
+                                    {getNoteText(dayNotes[h.id])}
+                                  </div>
                                 </div>
-                                <div className="text-sm" style={{ color: "#EDEDEA" }}>
-                                  {dayNotes[h.id]}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       );
@@ -3755,8 +3936,13 @@ export default function HabitTracker() {
                                         {ev.text}
                                       </div>
                                     </div>
-                                    <span className="text-xs shrink-0" style={{ color: "#6E6E6A" }}>
-                                      {parseDate(ev.date).toLocaleDateString("default", { day: "numeric", month: "short" })}
+                                    <span className="text-xs shrink-0 text-right" style={{ color: "#6E6E6A" }}>
+                                      <div>{parseDate(ev.date).toLocaleDateString("default", { day: "numeric", month: "short" })}</div>
+                                      {ev.time && (
+                                        <div className="mt-0.5">
+                                          {new Date(ev.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}
+                                        </div>
+                                      )}
                                     </span>
                                   </div>
                                 ) : (
@@ -4650,7 +4836,7 @@ export default function HabitTracker() {
       {/* Daily completion trend graph */}
       {showTrendGraph &&
         (() => {
-          const series = buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions);
+          const series = buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions, selectedCategory);
           const todayDate = parseDate(today);
           const trackedDays = series.filter((pt) => pt.pct !== null).length;
           return (
