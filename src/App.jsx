@@ -5,6 +5,8 @@ import {
   Star,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Trash2,
   ArrowLeft,
   X,
@@ -45,6 +47,8 @@ import {
   PawPrint,
   Gamepad2,
   Palette,
+  Apple,
+  Home,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -188,36 +192,74 @@ const COLORS = [
   "#3A86FF", "#FFBE0B", "#FB5607",
 ];
 
-const ICONS = [
-  { key: "target", Icon: Target },
-  { key: "dumbbell", Icon: Dumbbell },
-  { key: "droplet", Icon: Droplet },
-  { key: "book", Icon: BookOpen },
-  { key: "moon", Icon: Moon },
-  { key: "sun", Icon: Sun },
-  { key: "heart", Icon: Heart },
-  { key: "flame", Icon: Flame },
-  { key: "coffee", Icon: Coffee },
-  { key: "brain", Icon: Brain },
-  { key: "bike", Icon: Bike },
-  { key: "music", Icon: Music2 },
-  { key: "utensils", Icon: Utensils },
-  { key: "smile", Icon: Smile },
-  { key: "leaf", Icon: Leaf },
-  { key: "pen", Icon: PenLine },
-  { key: "sparkles", Icon: Sparkles },
-  { key: "zap", Icon: Zap },
-  { key: "footprints", Icon: Footprints },
-  { key: "bath", Icon: Bath },
-  { key: "salad", Icon: Salad },
-  { key: "wallet", Icon: Wallet },
-  { key: "graduation", Icon: GraduationCap },
-  { key: "bed", Icon: Bed },
-  { key: "guitar", Icon: Guitar },
-  { key: "paw", Icon: PawPrint },
-  { key: "gamepad", Icon: Gamepad2 },
-  { key: "palette", Icon: Palette },
+const ICON_CATEGORIES = [
+  {
+    label: "Fitness",
+    icons: [
+      { key: "dumbbell", Icon: Dumbbell },
+      { key: "bike", Icon: Bike },
+      { key: "footprints", Icon: Footprints },
+      { key: "flame", Icon: Flame },
+      { key: "zap", Icon: Zap },
+    ],
+  },
+  {
+    label: "Wellness & Sleep",
+    icons: [
+      { key: "heart", Icon: Heart },
+      { key: "bath", Icon: Bath },
+      { key: "bed", Icon: Bed },
+      { key: "moon", Icon: Moon },
+      { key: "sun", Icon: Sun },
+    ],
+  },
+  {
+    label: "Food & Drink",
+    icons: [
+      { key: "utensils", Icon: Utensils },
+      { key: "salad", Icon: Salad },
+      { key: "coffee", Icon: Coffee },
+      { key: "droplet", Icon: Droplet },
+      { key: "apple", Icon: Apple },
+    ],
+  },
+  {
+    label: "Mind & Learning",
+    icons: [
+      { key: "book", Icon: BookOpen },
+      { key: "graduation", Icon: GraduationCap },
+      { key: "pen", Icon: PenLine },
+      { key: "brain", Icon: Brain },
+      { key: "sparkles", Icon: Sparkles },
+    ],
+  },
+  {
+    label: "Creative & Fun",
+    icons: [
+      { key: "palette", Icon: Palette },
+      { key: "guitar", Icon: Guitar },
+      { key: "gamepad", Icon: Gamepad2 },
+      { key: "music", Icon: Music2 },
+      { key: "paw", Icon: PawPrint },
+    ],
+  },
+  {
+    label: "Life & Home",
+    icons: [
+      { key: "wallet", Icon: Wallet },
+      { key: "home", Icon: Home },
+      { key: "leaf", Icon: Leaf },
+      { key: "smile", Icon: Smile },
+      { key: "target", Icon: Target },
+    ],
+  },
 ];
+
+// Flat list derived from the categories above — every existing lookup that
+// searches icons by key (rendering a habit's icon, the random-pick helper)
+// keeps working unchanged.
+const ICONS = ICON_CATEGORIES.flatMap((c) => c.icons);
+
 
 const WEEKDAYS = [
   { key: "MO", label: "Mon" },
@@ -916,10 +958,12 @@ export default function HabitTracker() {
   const [statsHabit, setStatsHabit] = useState(null);
   const [noteModalHabit, setNoteModalHabit] = useState(null);
   const [noteInputValue, setNoteInputValue] = useState("");
+  const [noteModalDate, setNoteModalDate] = useState(null);
   const [cameraNotice, setCameraNotice] = useState(false);
   const [period, setPeriod] = useState("weekly");
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
   useEffect(() => {
     if (selectedCategory === "All") return;
@@ -1617,22 +1661,26 @@ export default function HabitTracker() {
     setPercentEditHabit(null);
   };
 
-  const openNoteModal = (habit) => {
-    setNoteInputValue(getNoteText(notes[today]?.[habit.id]));
+  const openNoteModal = (habit, dateStr = today) => {
+    setNoteInputValue(getNoteText(notes[dateStr]?.[habit.id]));
     setNoteModalHabit(habit);
+    setNoteModalDate(dateStr);
   };
 
   const saveNote = () => {
-    if (!noteModalHabit) return;
+    if (!noteModalHabit || !noteModalDate) return;
     const trimmed = noteInputValue.trim();
-    const dayNotes = { ...(notes[today] || {}) };
+    const dayNotes = { ...(notes[noteModalDate] || {}) };
     if (trimmed) {
-      dayNotes[noteModalHabit.id] = { text: trimmed, time: Date.now() };
+      const existing = dayNotes[noteModalHabit.id];
+      const existingTime = existing && typeof existing !== "string" ? existing.time : null;
+      dayNotes[noteModalHabit.id] = { text: trimmed, time: existingTime || Date.now() };
     } else {
       delete dayNotes[noteModalHabit.id];
     }
-    persistNotes({ ...notes, [today]: dayNotes });
+    persistNotes({ ...notes, [noteModalDate]: dayNotes });
     setNoteModalHabit(null);
+    setNoteModalDate(null);
   };
 
   const openDetail = (habit) => {
@@ -2300,42 +2348,6 @@ export default function HabitTracker() {
           Every habit is a layer. Harder ones sit deeper.
         </p>
 
-        {/* Category switcher */}
-        {categoriesInUse.length > 0 && (
-          <div className="hide-scrollbar flex gap-2 mb-6" style={{ overflowX: "auto" }}>
-            <button
-              onClick={() => setSelectedCategory("All")}
-              className="shrink-0 rounded-full px-3 py-1.5 text-xs mono"
-              style={{
-                background: selectedCategory === "All" ? ACCENT_GREEN : "#0D0D0D",
-                border: `1px solid ${selectedCategory === "All" ? ACCENT_GREEN : "#242422"}`,
-                color: selectedCategory === "All" ? "#000000" : "#EDEDEA",
-                fontWeight: selectedCategory === "All" ? 700 : 500,
-              }}
-            >
-              All
-            </button>
-            {categoriesInUse.map((cat) => {
-              const active = selectedCategory === cat;
-              return (
-                <button
-                  key={cat}
-                  onClick={() => setSelectedCategory(cat)}
-                  className="shrink-0 rounded-full px-3 py-1.5 text-xs mono"
-                  style={{
-                    background: active ? ACCENT_GREEN : "#0D0D0D",
-                    border: `1px solid ${active ? ACCENT_GREEN : "#242422"}`,
-                    color: active ? "#000000" : "#EDEDEA",
-                    fontWeight: active ? 700 : 500,
-                  }}
-                >
-                  {cat}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
         {/* This week */}
         <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
           <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
@@ -2469,6 +2481,82 @@ export default function HabitTracker() {
             {avg === null ? "No tracked days in this window yet" : `avg over the last ${PERIODS.find((p) => p.key === period).days} day${PERIODS.find((p) => p.key === period).days === 1 ? "" : "s"}`}
           </div>
         </div>
+
+        {/* Category picker */}
+        {categoriesInUse.length > 0 && (
+          <div className="mb-6">
+            <button
+              onClick={() => setShowCategoryPicker((v) => !v)}
+              className="w-full flex items-center justify-between rounded-lg px-4 py-3"
+              style={{
+                backgroundColor: "#0D0D0D",
+                backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
+                border: "1px solid #242422",
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs mono" style={{ color: "#8A8A85" }}>
+                  CATEGORY
+                </span>
+                <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                  {selectedCategory}
+                </span>
+              </div>
+              {showCategoryPicker ? (
+                <ChevronUp size={16} color="#8A8A85" />
+              ) : (
+                <ChevronDown size={16} color="#8A8A85" />
+              )}
+            </button>
+
+            {showCategoryPicker && (
+              <div
+                className="hide-scrollbar mt-2 rounded-lg p-2 flex flex-col gap-1"
+                style={{
+                  background: "#0D0D0D",
+                  border: "1px solid #242422",
+                  maxHeight: "240px",
+                  overflowY: "auto",
+                }}
+              >
+                <button
+                  onClick={() => {
+                    setSelectedCategory("All");
+                    setShowCategoryPicker(false);
+                  }}
+                  className="text-left rounded-md px-3 py-2.5 text-sm"
+                  style={{
+                    background: selectedCategory === "All" ? hexToRgba(ACCENT_GREEN, 0.16) : "transparent",
+                    color: selectedCategory === "All" ? ACCENT_GREEN : "#EDEDEA",
+                    fontWeight: selectedCategory === "All" ? 700 : 500,
+                  }}
+                >
+                  All
+                </button>
+                {categoriesInUse.map((cat) => {
+                  const active = selectedCategory === cat;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => {
+                        setSelectedCategory(cat);
+                        setShowCategoryPicker(false);
+                      }}
+                      className="text-left rounded-md px-3 py-2.5 text-sm"
+                      style={{
+                        background: active ? hexToRgba(ACCENT_GREEN, 0.16) : "transparent",
+                        color: active ? ACCENT_GREEN : "#EDEDEA",
+                        fontWeight: active ? 700 : 500,
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Today / selected day */}
         <div
@@ -3046,24 +3134,35 @@ export default function HabitTracker() {
             )}
 
             {showIconPicker && (
-              <div className="grid grid-cols-5 gap-3 mb-5 p-4 rounded-lg" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                {ICONS.map(({ key, Icon }) => (
-                  <button
-                    key={key}
-                    onClick={() => {
-                      setIcon(key);
-                      setShowIconPicker(false);
-                    }}
-                    className="swatch-btn w-11 h-11 rounded-full flex items-center justify-center"
-                    style={{
-                      background: icon === key ? hexToRgba(color, 0.22) : "#000000",
-                      border: icon === key ? `2px solid ${color}` : "1px solid #242422",
-                    }}
-                    aria-label={`Choose icon ${key}`}
-                  >
-                    <Icon size={18} color={icon === key ? color : "#9A9A94"} />
-                  </button>
-                ))}
+              <div className="mb-5 p-3 rounded-lg" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                <div className="hide-scrollbar flex flex-col gap-3" style={{ maxHeight: "300px", overflowY: "auto" }}>
+                  {ICON_CATEGORIES.map((cat) => (
+                    <div key={cat.label}>
+                      <div className="text-xs mono mb-2 px-1" style={{ color: "#6E6E6A", letterSpacing: "1px" }}>
+                        {cat.label.toUpperCase()}
+                      </div>
+                      <div className="grid grid-cols-5 gap-3">
+                        {cat.icons.map(({ key, Icon }) => (
+                          <button
+                            key={key}
+                            onClick={() => {
+                              setIcon(key);
+                              setShowIconPicker(false);
+                            }}
+                            className="swatch-btn w-11 h-11 rounded-full flex items-center justify-center"
+                            style={{
+                              background: icon === key ? hexToRgba(color, 0.22) : "#000000",
+                              border: icon === key ? `2px solid ${color}` : "1px solid #242422",
+                            }}
+                            aria-label={`Choose icon ${key}`}
+                          >
+                            <Icon size={18} color={icon === key ? color : "#9A9A94"} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -3762,6 +3861,7 @@ export default function HabitTracker() {
                                 ` at ${new Date(milestoneCompletionTimes[h.id][m.id]).toLocaleTimeString("default", {
                                   hour: "numeric",
                                   minute: "2-digit",
+                                  hour12: true,
                                 })}`}
                             </div>
                           )}
@@ -3777,7 +3877,7 @@ export default function HabitTracker() {
                                 {overdue ? "Was due " : "Due "}
                                 {new Date(m.deadline).toLocaleDateString("default", { month: "short", day: "numeric" })}
                                 {" at "}
-                                {new Date(m.deadline).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}
+                                {new Date(m.deadline).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}
                               </div>
                             );
                           })()}
@@ -3799,16 +3899,24 @@ export default function HabitTracker() {
                             {habitNotes.map(([ds, dayNotes]) => {
                               const noteTime = getNoteTime(dayNotes[h.id]);
                               return (
-                                <div key={ds} className="rounded-lg p-3" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                                  <div className="text-xs mb-1" style={{ color: "#6E6E6A" }}>
-                                    {parseDate(ds).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
-                                    {noteTime &&
-                                      ` at ${new Date(noteTime).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}`}
+                                <button
+                                  key={ds}
+                                  onClick={() => openNoteModal(h, ds)}
+                                  className="text-left rounded-lg p-3 w-full"
+                                  style={{ background: "#0D0D0D", border: "1px solid #242422" }}
+                                >
+                                  <div className="flex items-start justify-between gap-2 mb-1">
+                                    <div className="text-xs" style={{ color: "#6E6E6A" }}>
+                                      {parseDate(ds).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                                      {noteTime &&
+                                        ` at ${new Date(noteTime).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                                    </div>
+                                    <Pencil size={12} color="#6E6E6A" style={{ flexShrink: 0, marginTop: "2px" }} />
                                   </div>
                                   <div className="text-sm" style={{ color: "#EDEDEA" }}>
                                     {getNoteText(dayNotes[h.id])}
                                   </div>
-                                </div>
+                                </button>
                               );
                             })}
                           </div>
@@ -3923,8 +4031,13 @@ export default function HabitTracker() {
                                 )}
                               </div>
                               <div
+                                onClick={ev.kind === "note" ? () => openNoteModal(h, ev.date) : undefined}
                                 className="flex-1 rounded-lg px-4 py-3"
-                                style={{ background: "#0D0D0D", border: "1px solid #242422" }}
+                                style={{
+                                  background: "#0D0D0D",
+                                  border: "1px solid #242422",
+                                  cursor: ev.kind === "note" ? "pointer" : "default",
+                                }}
                               >
                                 {ev.kind === "note" ? (
                                   <div className="flex items-start justify-between gap-3">
@@ -3936,11 +4049,12 @@ export default function HabitTracker() {
                                         {ev.text}
                                       </div>
                                     </div>
-                                    <span className="text-xs shrink-0 text-right" style={{ color: "#6E6E6A" }}>
+                                    <span className="text-xs shrink-0 text-right flex flex-col items-end gap-1" style={{ color: "#6E6E6A" }}>
+                                      <Pencil size={11} color="#6E6E6A" />
                                       <div>{parseDate(ev.date).toLocaleDateString("default", { day: "numeric", month: "short" })}</div>
                                       {ev.time && (
                                         <div className="mt-0.5">
-                                          {new Date(ev.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit" })}
+                                          {new Date(ev.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}
                                         </div>
                                       )}
                                     </span>
@@ -4042,7 +4156,10 @@ export default function HabitTracker() {
       {/* Add note modal */}
       {noteModalHabit && (
         <div
-          onClick={() => setNoteModalHabit(null)}
+          onClick={() => {
+            setNoteModalHabit(null);
+            setNoteModalDate(null);
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -4067,7 +4184,10 @@ export default function HabitTracker() {
             }}
           >
             <div className="text-sm mb-4" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-              Note for {noteModalHabit.name} — Today
+              Note for {noteModalHabit.name} —{" "}
+              {noteModalDate === today
+                ? "Today"
+                : parseDate(noteModalDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
             </div>
             <textarea
               autoFocus
@@ -4080,7 +4200,10 @@ export default function HabitTracker() {
             />
             <div className="flex gap-2">
               <button
-                onClick={() => setNoteModalHabit(null)}
+                onClick={() => {
+                  setNoteModalHabit(null);
+                  setNoteModalDate(null);
+                }}
                 className="flex-1 rounded-md py-2 text-sm"
                 style={{ background: "transparent", border: "1px solid #3A3A35", color: "#EDEDEA" }}
               >
