@@ -49,9 +49,23 @@ import {
   Palette,
   Apple,
   Home,
+  User,
+  Download,
+  Upload,
+  Menu,
+  Archive,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
+
+// To enable "Sign in with Google" (identity only — see the Account panel for
+// why this alone doesn't sync data across devices), create a free OAuth
+// Client ID at https://console.cloud.google.com/apis/credentials
+// ("Create Credentials" -> "OAuth client ID" -> Application type: "Web
+// application", and add your app's URL under "Authorized JavaScript
+// origins"), then paste it here. Leave blank to keep sign-in disabled.
+const GOOGLE_CLIENT_ID = "";
+
 const MAX_DIFFICULTY = 5;
 const HABITS_KEY = "habits";
 const RECORDS_KEY = "day-records";
@@ -940,6 +954,12 @@ export default function HabitTracker() {
   const today = fmt(new Date());
 
   const [loading, setLoading] = useState(true);
+  const [showAccountModal, setShowAccountModal] = useState(false);
+  const [currentView, setCurrentView] = useState("home");
+  const [showNavMenu, setShowNavMenu] = useState(false);
+  const [googleUser, setGoogleUser] = useState(null);
+  const [googleSignInError, setGoogleSignInError] = useState("");
+  const [backupMessage, setBackupMessage] = useState("");
   const [habits, setHabits] = useState([]);
   const [records, setRecords] = useState({});
   const [percentRecords, setPercentRecords] = useState({});
@@ -1026,6 +1046,8 @@ export default function HabitTracker() {
 
   const pressRef = useRef({ timer: null, longPressed: false });
   const audioCtxRef = useRef(null);
+  const googleButtonRef = useRef(null);
+  const backupFileInputRef = useRef(null);
 
   function getAudioContext() {
     if (!audioCtxRef.current) {
@@ -1203,6 +1225,138 @@ export default function HabitTracker() {
     }
   }
 
+  // Bundles every piece of stored data into one downloadable file. This is
+  // the actual working way to move progress to a new device: export here,
+  // transfer the file however you like (email, Drive, AirDrop...), then
+  // import it on the new device.
+  function exportBackup() {
+    const payload = {
+      app: "strata-habit-tracker",
+      exportedAt: new Date().toISOString(),
+      data: {
+        habits,
+        records,
+        percentRecords,
+        notes,
+        quantityRecords,
+        milestoneCompletions,
+        milestoneTargets,
+        milestoneCompletionTimes,
+      },
+    };
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const dateStamp = fmt(new Date());
+      a.href = url;
+      a.download = `strata-backup-${dateStamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setBackupMessage("Backup downloaded.");
+    } catch (e) {
+      console.error("Export failed:", e);
+      setBackupMessage("Export failed — try again.");
+    }
+  }
+
+  // Reads a previously exported file and restores it, overwriting whatever
+  // is currently stored on this device.
+  async function importBackup(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const d = parsed && parsed.data;
+      if (!d || !Array.isArray(d.habits)) {
+        setBackupMessage("That doesn't look like a Strata backup file.");
+        return;
+      }
+      await persistHabits(d.habits || []);
+      await persistRecords(d.records || {});
+      await persistPercentRecords(d.percentRecords || {});
+      await persistNotes(d.notes || {});
+      await persistQuantityRecords(d.quantityRecords || {});
+      await persistMilestoneCompletions(d.milestoneCompletions || {});
+      await persistMilestoneTargets(d.milestoneTargets || {});
+      await persistMilestoneCompletionTimes(d.milestoneCompletionTimes || {});
+      setBackupMessage("Backup restored.");
+    } catch (e) {
+      console.error("Import failed:", e);
+      setBackupMessage("Couldn't read that file — make sure it's a Strata backup.");
+    }
+  }
+
+  // Decodes the JWT Google hands back after sign-in (name/email/photo only
+  // — this is identity, not a data channel; nothing here syncs habit data).
+  function decodeJwtPayload(token) {
+    try {
+      const base64Url = token.split(".")[1];
+      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+      const json = decodeURIComponent(
+        atob(base64)
+          .split("")
+          .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+          .join("")
+      );
+      return JSON.parse(json);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  useEffect(() => {
+    if (!showAccountModal || !GOOGLE_CLIENT_ID || googleUser) return;
+    setGoogleSignInError("");
+
+    const init = () => {
+      try {
+        if (!window.google?.accounts?.id) {
+          setGoogleSignInError("Google sign-in couldn't load.");
+          return;
+        }
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (response) => {
+            const payload = decodeJwtPayload(response.credential);
+            if (payload) {
+              setGoogleUser({ name: payload.name, email: payload.email, picture: payload.picture });
+            } else {
+              setGoogleSignInError("Couldn't read your Google account details.");
+            }
+          },
+        });
+        if (googleButtonRef.current) {
+          googleButtonRef.current.innerHTML = "";
+          window.google.accounts.id.renderButton(googleButtonRef.current, {
+            theme: "filled_black",
+            size: "large",
+            shape: "pill",
+            width: 280,
+          });
+        }
+      } catch (e) {
+        setGoogleSignInError("Google sign-in couldn't load.");
+      }
+    };
+
+    if (document.getElementById("google-identity-script")) {
+      init();
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "google-identity-script";
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = init;
+    script.onerror = () => setGoogleSignInError("Couldn't reach Google — check your connection.");
+    document.body.appendChild(script);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAccountModal, googleUser]);
+
   // ---- Milestone deadline reminders (10h and 4h before due) ----
   // These fire while the app is open: a real browser Notification when
   // permission has been granted, and always an in-app toast as a fallback
@@ -1344,6 +1498,17 @@ export default function HabitTracker() {
       if (crossed.length > 0) {
         const level = crossed[crossed.length - 1];
         setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
+      }
+
+      // Once every milestone is checked off, there's nothing left to do —
+      // move it to the archive automatically instead of leaving a "0 left"
+      // habit sitting in the daily list.
+      const totalMilestones = (habit.milestones || []).length;
+      if (totalMilestones > 0 && newTotal >= totalMilestones && !habit.completed) {
+        const newHabits = habits.map((h) =>
+          h.id === habit.id ? { ...h, completed: true, completedDate: today, completedAt: Date.now() } : h
+        );
+        persistHabits(newHabits);
       }
     }
   };
@@ -1695,7 +1860,9 @@ export default function HabitTracker() {
   const confirmCompleteHabit = () => {
     const habit = completeHabitConfirm;
     if (!habit) return;
-    const newHabits = habits.map((h) => (h.id === habit.id ? { ...h, completed: true, completedDate: today } : h));
+    const newHabits = habits.map((h) =>
+      h.id === habit.id ? { ...h, completed: true, completedDate: today, completedAt: Date.now() } : h
+    );
     persistHabits(newHabits);
     setCompleteHabitConfirm(null);
     setDetailHabit(null);
@@ -2322,6 +2489,23 @@ export default function HabitTracker() {
         {/* Header */}
         <div className="flex items-baseline justify-between mb-1">
           <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setShowNavMenu(true)}
+              aria-label="Open menu"
+              className="icon-action-btn"
+              style={{
+                width: "34px",
+                height: "34px",
+                borderRadius: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid #242422",
+                color: "#EDEDEA",
+              }}
+            >
+              <Menu size={18} />
+            </button>
             <div className="flex flex-col gap-[3px]" aria-hidden="true">
               <div style={{ width: "16px", height: "3px", borderRadius: "2px", background: ACCENT_GREEN }} />
               <div style={{ width: "12px", height: "3px", borderRadius: "2px", background: "#9B5DE5" }} />
@@ -2348,6 +2532,7 @@ export default function HabitTracker() {
           Every habit is a layer. Harder ones sit deeper.
         </p>
 
+        <div style={{ display: currentView === "home" ? "block" : "none" }}>
         {/* This week */}
         <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
           <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
@@ -2869,6 +3054,126 @@ export default function HabitTracker() {
             })}
           </div>
         </div>
+        </div>
+
+        {/* Archive view */}
+        {currentView === "archive" && (() => {
+          const archivedMilestoneHabits = habits.filter((h) => h.frequency?.type === "milestone" && h.completed);
+          const archivedRegularHabits = habits.filter((h) => h.frequency?.type !== "milestone" && h.completed);
+          const nothingArchived = archivedMilestoneHabits.length === 0 && archivedRegularHabits.length === 0;
+          return (
+            <div>
+              <div className="text-xs mono tracking-wide mb-4 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: "#8A8A85", display: "inline-block" }} />
+                ARCHIVE
+              </div>
+
+              {nothingArchived && (
+                <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                  Nothing archived yet. Habits you archive, and milestone habits you finish, show up here.
+                </div>
+              )}
+
+              {archivedMilestoneHabits.length > 0 && (
+                <div className="mb-8">
+                  <div className="text-sm mb-3" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                    Completed Milestones
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {archivedMilestoneHabits.map((h) => {
+                      const HabitIcon = getIcon(h.icon);
+                      const totalMilestones = (h.milestones || []).length;
+                      return (
+                        <button
+                          key={h.id}
+                          onClick={() => openDetail(h)}
+                          className="rounded-lg p-3 flex items-center gap-3 text-left w-full"
+                          style={{ background: "#141412", border: "1px solid #242422" }}
+                        >
+                          <div
+                            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                            style={{
+                              backgroundColor: hexToRgba(h.color, 0.14),
+                              backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                              boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
+                            }}
+                          >
+                            <HabitIcon size={17} color={h.color} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm truncate" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                              {h.name}
+                            </div>
+                            <div className="text-xs mt-0.5" style={{ color: "#8A8A85" }}>
+                              {totalMilestones}/{totalMilestones} milestones
+                              {h.completedAt &&
+                                ` · ${parseDate(h.completedDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })} at ${new Date(
+                                  h.completedAt
+                                ).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {archivedRegularHabits.length > 0 && (
+                <div>
+                  <div className="text-sm mb-3" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                    Archived Habits
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {archivedRegularHabits.map((h) => {
+                      const HabitIcon = getIcon(h.icon);
+                      return (
+                        <div
+                          key={h.id}
+                          className="rounded-lg p-3 flex items-center gap-3"
+                          style={{ background: "#141412", border: "1px solid #242422" }}
+                        >
+                          <button
+                            onClick={() => openDetail(h)}
+                            className="flex items-center gap-3 text-left flex-1 min-w-0"
+                          >
+                            <div
+                              className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                              style={{
+                                backgroundColor: hexToRgba(h.color, 0.14),
+                                backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                                boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
+                              }}
+                            >
+                              <HabitIcon size={17} color={h.color} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm truncate" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                                {h.name}
+                              </div>
+                              <div className="text-xs mt-0.5" style={{ color: "#8A8A85" }}>
+                                Archived{" "}
+                                {h.completedDate &&
+                                  parseDate(h.completedDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                              </div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => reopenHabit(h)}
+                            className="text-xs shrink-0"
+                            style={{ color: "#8A8A85", textDecoration: "underline" }}
+                          >
+                            Restore
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Floating add button */}
@@ -2895,6 +3200,37 @@ export default function HabitTracker() {
         }}
       >
         <Plus size={26} strokeWidth={2.5} />
+      </button>
+
+      {/* Account & backup button */}
+      <button
+        onClick={() => {
+          setBackupMessage("");
+          setShowAccountModal(true);
+        }}
+        aria-label="Account and backup"
+        className="icon-action-btn"
+        style={{
+          position: "fixed",
+          bottom: "24px",
+          left: "24px",
+          width: "50px",
+          height: "50px",
+          borderRadius: "999px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          border: "1px solid #262622",
+          boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
+          zIndex: 30,
+          overflow: "hidden",
+        }}
+      >
+        {googleUser?.picture ? (
+          <img src={googleUser.picture} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} referrerPolicy="no-referrer" />
+        ) : (
+          <User size={20} color="#EDEDEA" />
+        )}
       </button>
 
       {/* Shatter particles when a habit is deleted */}
@@ -4005,6 +4341,39 @@ export default function HabitTracker() {
                   </div>
                 )}
 
+                {h.completed ? (
+                  <div
+                    className="rounded-lg py-3 px-4 flex items-center justify-between gap-2 mb-8"
+                    style={{ background: hexToRgba(h.color, 0.16), border: `1px solid ${h.color}` }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Check size={16} color={h.color} strokeWidth={3} />
+                      <span className="text-sm" style={{ color: h.color, fontWeight: 600 }}>
+                        Archived
+                        {h.completedDate
+                          ? ` ${parseDate(h.completedDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}`
+                          : ""}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => reopenHabit(h)}
+                      className="text-xs shrink-0"
+                      style={{ color: "#8A8A85", textDecoration: "underline" }}
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => openCompleteHabitConfirm(h)}
+                    className="rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm mb-8"
+                    style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85", fontWeight: 600 }}
+                  >
+                    <Archive size={15} />
+                    Archive Habit
+                  </button>
+                )}
+
                 {/* Timeline */}
                 {timelineGroups.length === 0 ? (
                   <div className="detail-fade-4 text-sm text-center py-8" style={{ color: "#6E6E6A" }}>
@@ -5012,6 +5381,201 @@ export default function HabitTracker() {
           );
         })()}
 
+      {/* Home / Archive nav menu */}
+      {showNavMenu && (
+        <div
+          onClick={() => setShowNavMenu(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "flex-start",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-pop"
+            style={{
+              background: "#0D0D0D",
+              border: "1px solid #242422",
+              borderRadius: "14px",
+              padding: "10px",
+              width: "200px",
+              marginTop: "56px",
+            }}
+          >
+            <button
+              onClick={() => {
+                setCurrentView("home");
+                setShowNavMenu(false);
+              }}
+              className="w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 text-sm"
+              style={{
+                background: currentView === "home" ? hexToRgba(ACCENT_GREEN, 0.16) : "transparent",
+                color: currentView === "home" ? ACCENT_GREEN : "#EDEDEA",
+                fontWeight: currentView === "home" ? 700 : 500,
+              }}
+            >
+              <Home size={16} />
+              Home
+            </button>
+            <button
+              onClick={() => {
+                setCurrentView("archive");
+                setShowNavMenu(false);
+              }}
+              className="w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 text-sm mt-1"
+              style={{
+                background: currentView === "archive" ? hexToRgba(ACCENT_GREEN, 0.16) : "transparent",
+                color: currentView === "archive" ? ACCENT_GREEN : "#EDEDEA",
+                fontWeight: currentView === "archive" ? 700 : 500,
+              }}
+            >
+              <Archive size={16} />
+              Archive
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Account & backup */}
+      {showAccountModal && (
+        <div
+          onClick={() => setShowAccountModal(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-pop"
+            style={{
+              background: "#0D0D0D",
+              border: "1px solid #242422",
+              borderRadius: "14px",
+              padding: "20px",
+              width: "100%",
+              maxWidth: "380px",
+              maxHeight: "85vh",
+              overflowY: "auto",
+            }}
+          >
+            <div className="flex items-center justify-between mb-5">
+              <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                Account &amp; Backup
+              </span>
+              <button onClick={() => setShowAccountModal(false)} aria-label="Close" style={{ color: "#8A8A85" }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mb-5">
+              <div className="text-xs mb-2 mono" style={{ color: "#8A8A85" }}>
+                GOOGLE ACCOUNT
+              </div>
+              {googleUser ? (
+                <div className="flex items-center gap-3 rounded-lg p-3" style={{ background: "#151513", border: "1px solid #262622" }}>
+                  {googleUser.picture && (
+                    <img
+                      src={googleUser.picture}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      style={{ width: "40px", height: "40px", borderRadius: "999px" }}
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm truncate" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                      {googleUser.name}
+                    </div>
+                    <div className="text-xs truncate" style={{ color: "#8A8A85" }}>
+                      {googleUser.email}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setGoogleUser(null)}
+                    className="text-xs shrink-0"
+                    style={{ color: "#8A8A85", textDecoration: "underline" }}
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : GOOGLE_CLIENT_ID ? (
+                <>
+                  <div ref={googleButtonRef} />
+                  {googleSignInError && (
+                    <div className="text-xs mt-2" style={{ color: "#E5484D" }}>
+                      {googleSignInError}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-xs rounded-lg p-3" style={{ background: "#151513", border: "1px solid #262622", color: "#8A8A85" }}>
+                  Sign-in isn't set up yet — it needs a free Google Client ID added to the code (see the
+                  GOOGLE_CLIENT_ID comment near the top of the file). Even once added, signing in only shows who
+                  you are — it doesn't move your data anywhere, since this app has no server. Use the backup
+                  below for that.
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-xs mb-2 mono" style={{ color: "#8A8A85" }}>
+                MOVE YOUR PROGRESS TO A NEW DEVICE
+              </div>
+              <div className="text-xs mb-3" style={{ color: "#8A8A85" }}>
+                Nothing syncs automatically here. Export a backup file, send it to your new device however you
+                like (email, Drive, AirDrop), then import it there.
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={exportBackup}
+                  className="flex-1 rounded-md py-2.5 flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA", fontWeight: 600 }}
+                >
+                  <Download size={15} />
+                  Export
+                </button>
+                <button
+                  onClick={() => backupFileInputRef.current?.click()}
+                  className="flex-1 rounded-md py-2.5 flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA", fontWeight: 600 }}
+                >
+                  <Upload size={15} />
+                  Import
+                </button>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept="application/json"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    importBackup(f);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {backupMessage && (
+                <div className="text-xs mt-3" style={{ color: ACCENT_GREEN }}>
+                  {backupMessage}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mark habit completed confirmation */}
       {completeHabitConfirm && (
         <div
@@ -5040,10 +5604,12 @@ export default function HabitTracker() {
             }}
           >
             <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-              Mark "{completeHabitConfirm.name}" as completed?
+              {completeHabitConfirm.frequency?.type === "milestone"
+                ? `Mark "${completeHabitConfirm.name}" as completed?`
+                : `Archive "${completeHabitConfirm.name}"?`}
             </div>
             <div className="text-xs mb-5" style={{ color: "#8A8A85" }}>
-              It'll be archived and won't show up in your daily list starting tomorrow. You can reopen it later if you change your mind.
+              It'll move to your Archive and won't show up in your daily list starting tomorrow. You can restore it later if you change your mind.
             </div>
             <div className="flex gap-2">
               <button
