@@ -187,6 +187,52 @@ function triggerHaptics(pattern) {
   }
 }
 
+// A satisfying two-note rising "pop" for marking a habit done
+function playCheckSound(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  playTone(ctx, 660, now, 0.1, 0.13, "triangle");
+  playTone(ctx, 880, now + 0.05, 0.14, 0.15, "triangle");
+}
+
+// A soft single descending tone for un-marking a habit
+function playUncheckSound(ctx) {
+  if (!ctx) return;
+  playTone(ctx, 380, ctx.currentTime, 0.1, 0.08, "sine");
+}
+
+// A very short, quiet neutral tick for general button presses — subtle
+// enough to not get old even when tapped a lot
+function playClickSound(ctx) {
+  if (!ctx) return;
+  playTone(ctx, 720, ctx.currentTime, 0.035, 0.045, "square");
+}
+
+// A pleasant short rising chime for confirming/saving something
+function playConfirmSound(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  playTone(ctx, 523.25, now, 0.12, 0.12, "triangle");
+  playTone(ctx, 659.25, now + 0.06, 0.16, 0.13, "triangle");
+}
+
+// Two quick descending notes for deleting something
+function playDeleteSound(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  playTone(ctx, 480, now, 0.09, 0.1, "sawtooth");
+  playTone(ctx, 300, now + 0.05, 0.13, 0.09, "sawtooth");
+}
+
+// A softer, gentler version for archiving (less harsh than delete — this
+// isn't destructive, just tucked away)
+function playArchiveSound(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  playTone(ctx, 440, now, 0.11, 0.09, "sine");
+  playTone(ctx, 330, now + 0.06, 0.16, 0.08, "sine");
+}
+
 const PERIODS = [
   { key: "daily", label: "Daily", days: 1 },
   { key: "weekly", label: "Weekly", days: 7 },
@@ -356,16 +402,17 @@ function milestoneDayContribution(habit, dateStr, milestoneTargets, milestoneCom
   return { total: targetIds.length, done };
 }
 
-// A saved note is either a legacy plain string (no timestamp available) or
-// { text, time } once this feature landed. These two helpers read either
-// shape safely so old notes don't break.
-function getNoteText(val) {
-  if (!val) return "";
-  return typeof val === "string" ? val : val.text || "";
-}
-function getNoteTime(val) {
-  if (!val || typeof val === "string") return null;
-  return val.time || null;
+// A day's stored notes for a habit have gone through a few shapes over
+// time: a legacy plain string, then a single { text, time } object, and now
+// an array of { id, text, time } so a day can hold more than one note. This
+// normalizes any of those into an array so callers never have to care which
+// shape old data is in.
+function getHabitNotesArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string") return val.trim() ? [{ id: "legacy", text: val, time: null }] : [];
+  if (typeof val === "object" && val.text) return [{ id: "legacy", text: val.text, time: val.time || null }];
+  return [];
 }
 
 const ACHIEVEMENT_LEVELS = [
@@ -618,6 +665,11 @@ function fmt(date) {
 function parseDate(str) {
   const [y, m, d] = str.split("-").map(Number);
   return new Date(y, m - 1, d);
+}
+function getYesterday(todayStr) {
+  const d = parseDate(todayStr);
+  d.setDate(d.getDate() - 1);
+  return fmt(d);
 }
 
 function StarDisplay({ value, color = YELLOW, mutedColor = "#4A4A47" }) {
@@ -979,6 +1031,7 @@ export default function HabitTracker() {
   const [noteModalHabit, setNoteModalHabit] = useState(null);
   const [noteInputValue, setNoteInputValue] = useState("");
   const [noteModalDate, setNoteModalDate] = useState(null);
+  const [noteEditingId, setNoteEditingId] = useState(null);
   const [cameraNotice, setCameraNotice] = useState(false);
   const [period, setPeriod] = useState("weekly");
   const [selectedDate, setSelectedDate] = useState(today);
@@ -1487,7 +1540,9 @@ export default function HabitTracker() {
     }
     persistMilestoneCompletionTimes({ ...milestoneCompletionTimes, [habit.id]: habitTimes });
 
+    const ctx = getAudioContext();
     if (willBeDone) {
+      playCheckSound(ctx);
       const key = `${habit.id}-${milestoneId}`;
       setAnimatingMilestoneKey(key);
       setTimeout(() => setAnimatingMilestoneKey((k) => (k === key ? null : k)), 650);
@@ -1510,6 +1565,8 @@ export default function HabitTracker() {
         );
         persistHabits(newHabits);
       }
+    } else {
+      playUncheckSound(ctx);
     }
   };
 
@@ -1543,7 +1600,9 @@ export default function HabitTracker() {
     rec[habit.id] = willBeDone;
     persistRecords({ ...records, [selectedDate]: rec });
 
+    const ctx = getAudioContext();
     if (willBeDone) {
+      playCheckSound(ctx);
       setAnimatingId(habit.id);
       setTimeout(() => setAnimatingId(null), 660);
       const word = CELEBRATION_WORDS[Math.floor(Math.random() * CELEBRATION_WORDS.length)];
@@ -1558,6 +1617,8 @@ export default function HabitTracker() {
           setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
         }, 350);
       }
+    } else {
+      playUncheckSound(ctx);
     }
   };
 
@@ -1570,13 +1631,17 @@ export default function HabitTracker() {
     rec[habitId] = willBeDone;
     persistRecords({ ...records, [dateStr]: rec });
 
+    const ctx = getAudioContext();
     if (willBeDone && habit) {
+      playCheckSound(ctx);
       const newTotal = oldTotal + 1;
       const crossed = ACHIEVEMENT_LEVELS.filter((l) => oldTotal < l.threshold && newTotal >= l.threshold);
       if (crossed.length > 0) {
         const level = crossed[crossed.length - 1];
         setTrophyUnlock({ id: Date.now() + Math.random(), habit, level });
       }
+    } else {
+      playUncheckSound(ctx);
     }
   };
 
@@ -1670,6 +1735,7 @@ export default function HabitTracker() {
     const trimmed = name.trim();
     const trimmedCategory = category.trim();
     if (!trimmed || !trimmedCategory) return;
+    playConfirmSound(getAudioContext());
     const frequency =
       frequencyType === "everyday"
         ? { type: "everyday" }
@@ -1760,6 +1826,7 @@ export default function HabitTracker() {
   };
 
   const openAddModal = () => {
+    playClickSound(getAudioContext());
     resetAddForm();
     setSelectedDate(today);
     setShowAddModal(true);
@@ -1826,8 +1893,16 @@ export default function HabitTracker() {
     setPercentEditHabit(null);
   };
 
-  const openNoteModal = (habit, dateStr = today) => {
-    setNoteInputValue(getNoteText(notes[dateStr]?.[habit.id]));
+  const openNoteModal = (habit, dateStr = today, existingNoteId = null) => {
+    if (existingNoteId) {
+      const notesForDay = getHabitNotesArray(notes[dateStr]?.[habit.id]);
+      const existing = notesForDay.find((n) => n.id === existingNoteId);
+      setNoteInputValue(existing ? existing.text : "");
+      setNoteEditingId(existingNoteId);
+    } else {
+      setNoteInputValue("");
+      setNoteEditingId(null);
+    }
     setNoteModalHabit(habit);
     setNoteModalDate(dateStr);
   };
@@ -1836,16 +1911,27 @@ export default function HabitTracker() {
     if (!noteModalHabit || !noteModalDate) return;
     const trimmed = noteInputValue.trim();
     const dayNotes = { ...(notes[noteModalDate] || {}) };
-    if (trimmed) {
-      const existing = dayNotes[noteModalHabit.id];
-      const existingTime = existing && typeof existing !== "string" ? existing.time : null;
-      dayNotes[noteModalHabit.id] = { text: trimmed, time: existingTime || Date.now() };
-    } else {
-      delete dayNotes[noteModalHabit.id];
+    const existingArray = getHabitNotesArray(dayNotes[noteModalHabit.id]);
+
+    if (noteEditingId) {
+      if (trimmed) {
+        dayNotes[noteModalHabit.id] = existingArray.map((n) => (n.id === noteEditingId ? { ...n, text: trimmed } : n));
+      } else {
+        const filtered = existingArray.filter((n) => n.id !== noteEditingId);
+        if (filtered.length > 0) {
+          dayNotes[noteModalHabit.id] = filtered;
+        } else {
+          delete dayNotes[noteModalHabit.id];
+        }
+      }
+    } else if (trimmed) {
+      const newNote = { id: Date.now() + Math.random(), text: trimmed, time: Date.now() };
+      dayNotes[noteModalHabit.id] = [...existingArray, newNote];
     }
     persistNotes({ ...notes, [noteModalDate]: dayNotes });
     setNoteModalHabit(null);
     setNoteModalDate(null);
+    setNoteEditingId(null);
   };
 
   const openDetail = (habit) => {
@@ -1860,6 +1946,7 @@ export default function HabitTracker() {
   const confirmCompleteHabit = () => {
     const habit = completeHabitConfirm;
     if (!habit) return;
+    playArchiveSound(getAudioContext());
     const newHabits = habits.map((h) =>
       h.id === habit.id ? { ...h, completed: true, completedDate: today, completedAt: Date.now() } : h
     );
@@ -2015,11 +2102,17 @@ export default function HabitTracker() {
       });
     });
     Object.entries(notes).forEach(([ds, dayNotes]) => {
-      if (dayNotes && dayNotes[habit.id]) {
-        events.push({ kind: "note", date: ds, text: getNoteText(dayNotes[habit.id]), time: getNoteTime(dayNotes[habit.id]) });
-      }
+      const notesForDay = getHabitNotesArray(dayNotes && dayNotes[habit.id]);
+      notesForDay.forEach((n) => {
+        events.push({ kind: "note", date: ds, noteId: n.id, text: n.text, time: n.time });
+      });
     });
-    events.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    events.sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      const at = a.time || 0;
+      const bt = b.time || 0;
+      return bt - at;
+    });
 
     const groups = [];
     let currentMonthKey = null;
@@ -2131,9 +2224,28 @@ export default function HabitTracker() {
   const selectedPct = dayPct(selectedDate);
   const selectedRecord = records[selectedDate] || {};
   const categoriesInUse = Array.from(new Set(habits.map((h) => habitCategory(h)))).sort();
-  const visibleHabits = habits.filter(
-    (h) => isVisibleOn(h, selectedDate) && (selectedCategory === "All" || habitCategory(h) === selectedCategory)
-  );
+
+  // How "done" a habit is for a given day, on a 0-1 scale — used to sort the
+  // list from most done to least done. Regular habits are binary (done or
+  // not); percentage-tracked and milestone habits use their actual fraction
+  // so a habit that's 80% there ranks above one that's 20% there.
+  function habitDoneScore(h, dateStr, record) {
+    if (h.frequency?.type === "milestone") {
+      const total = (h.milestones || []).length;
+      if (total === 0) return 0;
+      return computeMilestoneCompletedCount(h) / total;
+    }
+    if (h.usesPercentage) {
+      const dateKey = h.frequency?.type === "once" ? h.frequency.date : dateStr;
+      const pct = percentRecords[dateKey]?.[h.id] ?? 0;
+      return pct / 100;
+    }
+    return record[h.id] ? 1 : 0;
+  }
+
+  const visibleHabits = habits
+    .filter((h) => isVisibleOn(h, selectedDate) && (selectedCategory === "All" || habitCategory(h) === selectedCategory))
+    .sort((a, b) => habitDoneScore(b, selectedDate, selectedRecord) - habitDoneScore(a, selectedDate, selectedRecord));
   const selectedDoneCount = visibleHabits.filter((h) => !!selectedRecord[h.id]).length;
   const selectedTotalCount = visibleHabits.length;
   const selectedIsToday = selectedDate === today;
@@ -2490,7 +2602,10 @@ export default function HabitTracker() {
         <div className="flex items-baseline justify-between mb-1">
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => setShowNavMenu(true)}
+              onClick={() => {
+                playClickSound(getAudioContext());
+                setShowNavMenu(true);
+              }}
               aria-label="Open menu"
               className="icon-action-btn"
               style={{
@@ -3205,6 +3320,7 @@ export default function HabitTracker() {
       {/* Account & backup button */}
       <button
         onClick={() => {
+          playClickSound(getAudioContext());
           setBackupMessage("");
           setShowAccountModal(true);
         }}
@@ -4222,9 +4338,16 @@ export default function HabitTracker() {
                     })}
 
                     {(() => {
-                      const habitNotes = Object.entries(notes)
-                        .filter(([, dayNotes]) => dayNotes && dayNotes[h.id])
-                        .sort((a, b) => (a[0] < b[0] ? 1 : -1));
+                      const habitNotes = [];
+                      Object.entries(notes).forEach(([ds, dayNotes]) => {
+                        getHabitNotesArray(dayNotes && dayNotes[h.id]).forEach((n) => {
+                          habitNotes.push({ date: ds, ...n });
+                        });
+                      });
+                      habitNotes.sort((a, b) => {
+                        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+                        return (b.time || 0) - (a.time || 0);
+                      });
                       if (habitNotes.length === 0) return null;
                       return (
                         <div className="mt-4">
@@ -4232,29 +4355,26 @@ export default function HabitTracker() {
                             Notes
                           </div>
                           <div className="flex flex-col gap-2">
-                            {habitNotes.map(([ds, dayNotes]) => {
-                              const noteTime = getNoteTime(dayNotes[h.id]);
-                              return (
-                                <button
-                                  key={ds}
-                                  onClick={() => openNoteModal(h, ds)}
-                                  className="text-left rounded-lg p-3 w-full"
-                                  style={{ background: "#0D0D0D", border: "1px solid #242422" }}
-                                >
-                                  <div className="flex items-start justify-between gap-2 mb-1">
-                                    <div className="text-xs" style={{ color: "#6E6E6A" }}>
-                                      {parseDate(ds).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
-                                      {noteTime &&
-                                        ` at ${new Date(noteTime).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
-                                    </div>
-                                    <Pencil size={12} color="#6E6E6A" style={{ flexShrink: 0, marginTop: "2px" }} />
+                            {habitNotes.map((note) => (
+                              <button
+                                key={`${note.date}-${note.id}`}
+                                onClick={() => openNoteModal(h, note.date, note.id)}
+                                className="text-left rounded-lg p-3 w-full"
+                                style={{ background: "#0D0D0D", border: "1px solid #242422" }}
+                              >
+                                <div className="flex items-start justify-between gap-2 mb-1">
+                                  <div className="text-xs" style={{ color: "#6E6E6A" }}>
+                                    {parseDate(note.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                                    {note.time &&
+                                      ` at ${new Date(note.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
                                   </div>
-                                  <div className="text-sm" style={{ color: "#EDEDEA" }}>
-                                    {getNoteText(dayNotes[h.id])}
-                                  </div>
-                                </button>
-                              );
-                            })}
+                                  <Pencil size={12} color="#6E6E6A" style={{ flexShrink: 0, marginTop: "2px" }} />
+                                </div>
+                                <div className="text-sm" style={{ color: "#EDEDEA" }}>
+                                  {note.text}
+                                </div>
+                              </button>
+                            ))}
                           </div>
                         </div>
                       );
@@ -4400,7 +4520,7 @@ export default function HabitTracker() {
                                 )}
                               </div>
                               <div
-                                onClick={ev.kind === "note" ? () => openNoteModal(h, ev.date) : undefined}
+                                onClick={ev.kind === "note" ? () => openNoteModal(h, ev.date, ev.noteId) : undefined}
                                 className="flex-1 rounded-lg px-4 py-3"
                                 style={{
                                   background: "#0D0D0D",
@@ -4528,6 +4648,7 @@ export default function HabitTracker() {
           onClick={() => {
             setNoteModalHabit(null);
             setNoteModalDate(null);
+            setNoteEditingId(null);
           }}
           style={{
             position: "fixed",
@@ -4552,12 +4673,42 @@ export default function HabitTracker() {
               maxWidth: "360px",
             }}
           >
-            <div className="text-sm mb-4" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-              Note for {noteModalHabit.name} —{" "}
-              {noteModalDate === today
-                ? "Today"
-                : parseDate(noteModalDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+            <div className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+              {noteEditingId ? "Edit note" : "Add note"} for {noteModalHabit.name}
             </div>
+
+            {noteEditingId ? (
+              <div className="text-xs mt-1 mb-4" style={{ color: "#8A8A85" }}>
+                {noteModalDate === today
+                  ? "Today"
+                  : parseDate(noteModalDate).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+              </div>
+            ) : (
+              <div className="flex gap-2 mt-3 mb-4">
+                {[
+                  { label: "Today", value: today },
+                  { label: "Yesterday", value: getYesterday(today) },
+                ].map((opt) => {
+                  const active = noteModalDate === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => setNoteModalDate(opt.value)}
+                      className="flex-1 rounded-md py-2 text-xs"
+                      style={{
+                        background: active ? hexToRgba(noteModalHabit.color, 0.18) : "#151513",
+                        border: `1px solid ${active ? noteModalHabit.color : "#262622"}`,
+                        color: active ? noteModalHabit.color : "#8A8A85",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <textarea
               autoFocus
               value={noteInputValue}
@@ -4572,6 +4723,7 @@ export default function HabitTracker() {
                 onClick={() => {
                   setNoteModalHabit(null);
                   setNoteModalDate(null);
+                  setNoteEditingId(null);
                 }}
                 className="flex-1 rounded-md py-2 text-sm"
                 style={{ background: "transparent", border: "1px solid #3A3A35", color: "#EDEDEA" }}
@@ -5674,6 +5826,7 @@ export default function HabitTracker() {
               </button>
               <button
                 onClick={() => {
+                  playDeleteSound(getAudioContext());
                   const idToDelete = deleteTarget.id;
                   const habitColor = deleteTarget.color;
                   const node = cardRefs.current[idToDelete];
