@@ -349,17 +349,20 @@ function isScheduledOn(habit, dateStr) {
 // Visibility differs from scheduling: "specific days" habits still show every day
 // (the day selection only affects streak math), but a "once" habit is truly one-off
 // and should only ever appear on its single designated date.
+// Whether a habit had been created yet as of a given date — habits from
+// before this field existed (sample habits, very old data) have no
+// createdAt and are treated as always having existed, so nothing vanishes.
+function habitExistsOn(habit, dateStr) {
+  if (!habit.createdAt) return true;
+  return dateStr >= fmt(new Date(habit.createdAt));
+}
+
 function isVisibleOn(habit, dateStr) {
-  // A habit never shows up on days before it existed — it starts appearing
-  // from its creation date onward, not retroactively on earlier days.
-  if (habit.createdAt) {
-    const createdDateStr = fmt(new Date(habit.createdAt));
-    if (dateStr < createdDateStr) return false;
-  }
   // A habit marked completed stays visible through the day it was completed
   // on, then disappears starting the next day — it's done, so it shouldn't
   // keep cluttering the daily list.
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
+  if (!habitExistsOn(habit, dateStr)) return false;
   if (habit.frequency?.type === "once") return isScheduledOn(habit, dateStr);
   return true;
 }
@@ -376,11 +379,8 @@ function habitCategory(habit) {
 // completion percentage on the days it's actually scheduled for — its
 // done/not-done state on any other day shouldn't move the number at all.
 function countsTowardPercentOn(habit, dateStr) {
-  if (habit.createdAt) {
-    const createdDateStr = fmt(new Date(habit.createdAt));
-    if (dateStr < createdDateStr) return false;
-  }
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
+  if (!habitExistsOn(habit, dateStr)) return false;
   return isScheduledOn(habit, dateStr);
 }
 
@@ -2280,22 +2280,8 @@ export default function HabitTracker() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
         .fraunces { font-family: 'Fraunces', serif; }
         .mono { font-family: 'IBM Plex Mono', monospace; }
-        .habit-card { transition: transform 0.1s ease, opacity 0.25s ease, filter 0.25s ease; user-select: none; -webkit-user-select: none; cursor: pointer; }
+        .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; }
         .habit-card:active { transform: scale(0.99); }
-        .habit-card-off-schedule {
-          opacity: 0.58;
-          filter: saturate(0.55);
-        }
-        .habit-card-off-schedule:active { opacity: 0.75; }
-        .off-schedule-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 9px;
-          font-weight: 600;
-          letter-spacing: 0.04em;
-          white-space: nowrap;
-        }
         @keyframes deleteAway {
           0% { clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); opacity: 1; filter: blur(0px); }
           100% { clip-path: polygon(100% 0%, 100% 0%, 100% 0%, 100% 0%); opacity: 0; filter: blur(3px); }
@@ -2623,7 +2609,7 @@ export default function HabitTracker() {
 
       <div className="app-content max-w-xl mx-auto px-5 py-10" style={{ paddingBottom: "110px" }}>
         {/* Header */}
-        <div className="flex items-baseline justify-between mb-1">
+        <div className="flex items-baseline mb-1">
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => {
@@ -2909,23 +2895,26 @@ export default function HabitTracker() {
               const done = !!selectedRecord[h.id];
               const HabitIcon = getIcon(h.icon);
               const isMilestoneHabit = h.frequency?.type === "milestone";
-              const isSpecificDays = h.frequency?.type === "specific_days";
-              const isOffSchedule = isSpecificDays && !isScheduledOn(h, selectedDate);
+              const isOffSchedule = h.frequency?.type === "specific_days" && !isScheduledOn(h, selectedDate);
               return (
                 <div
                   key={h.id}
                   ref={(el) => {
                     if (el) cardRefs.current[h.id] = el;
                   }}
-                  className={`habit-card rounded-lg p-3 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""} ${isOffSchedule ? "habit-card-off-schedule" : ""}`}
+                  className={`habit-card rounded-lg p-3 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
                   style={{
                     backgroundColor: "#141412",
                     backgroundImage: "linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)",
                     borderTop: "1px solid #242422",
                     borderRight: "1px solid #242422",
                     borderBottom: "1px solid #242422",
-                    borderLeft: isOffSchedule ? `3px dashed ${hexToRgba(h.color, 0.4)}` : `3px solid ${h.color}`,
-                    boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8)",
+                    borderLeft: `3px solid ${isOffSchedule ? hexToRgba(h.color, 0.4) : h.color}`,
+                    boxShadow: isOffSchedule
+                      ? "0 1px 0 rgba(255,255,255,0.02) inset, 0 4px 10px -10px rgba(0,0,0,0.6)"
+                      : "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8)",
+                    opacity: isOffSchedule ? 0.52 : 1,
+                    transition: "transform 0.1s ease, opacity 0.25s ease, box-shadow 0.25s ease",
                     "--card-glow": hexToRgba(h.color, 0.6),
                   }}
                   onPointerDown={handleCardDown}
@@ -2938,12 +2927,12 @@ export default function HabitTracker() {
                       className="w-10 h-10 rounded-full flex items-center justify-center"
                       style={{
                         position: "relative",
-                        backgroundColor: hexToRgba(h.color, isOffSchedule ? 0.07 : 0.14),
-                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, isOffSchedule ? 0.2 : 0.4)} 0%, ${hexToRgba(h.color, isOffSchedule ? 0.05 : 0.1)} 72%)`,
-                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, isOffSchedule ? 0.15 : 0.3)} inset`,
+                        backgroundColor: hexToRgba(h.color, 0.14),
+                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
                       }}
                     >
-                      <HabitIcon size={19} color={isOffSchedule ? hexToRgba(h.color, 0.55) : h.color} />
+                      <HabitIcon size={19} color={h.color} />
                       {(() => {
                         const unlockedCount = getEffectiveLevels(h).filter((l) => computeAchievementProgress(h) >= l.threshold).length;
                         return (
@@ -3168,20 +3157,11 @@ export default function HabitTracker() {
                     )}
 
                     {isOffSchedule && (
-                      <div
-                        className="off-schedule-badge mono rounded-full mt-1.5"
-                        style={{
-                          color: hexToRgba(h.color, 0.75),
-                          border: `1px dashed ${hexToRgba(h.color, 0.35)}`,
-                          padding: "2px 7px",
-                          width: "fit-content",
-                        }}
-                      >
-                        <Calendar size={9} />
-                        {(h.frequency.days || [])
-                          .map((k) => WEEKDAYS.find((w) => w.key === k)?.label)
-                          .filter(Boolean)
-                          .join(" · ")}
+                      <div className="flex items-center gap-1 mt-1">
+                        <span style={{ width: "4px", height: "4px", borderRadius: "999px", background: "#5A5A56", display: "inline-block" }} />
+                        <span className="text-xs mono" style={{ color: "#6E6E6A", letterSpacing: "0.3px" }}>
+                          Not scheduled today
+                        </span>
                       </div>
                     )}
 
