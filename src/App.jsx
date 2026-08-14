@@ -2233,13 +2233,6 @@ export default function HabitTracker() {
 
   function buildTimelineGroups(habit) {
     const events = [];
-    computeStreakSegments(habit).forEach((seg) => {
-      events.push({
-        kind: seg.ongoing ? "ongoing" : "ended",
-        date: seg.ongoing ? today : seg.endDate,
-        length: seg.length,
-      });
-    });
     Object.entries(notes).forEach(([ds, dayNotes]) => {
       const notesForDay = getHabitNotesArray(dayNotes && dayNotes[habit.id]);
       notesForDay.forEach((n) => {
@@ -2254,14 +2247,18 @@ export default function HabitTracker() {
     });
 
     const groups = [];
-    let currentMonthKey = null;
+    let currentDateKey = null;
     let currentGroup = null;
+    const yesterday = getYesterday(today);
     events.forEach((ev) => {
-      const d = parseDate(ev.date);
-      const monthKey = `${d.getFullYear()}-${d.getMonth()}`;
-      if (monthKey !== currentMonthKey) {
-        currentMonthKey = monthKey;
-        currentGroup = { label: d.toLocaleString("default", { month: "long", year: "numeric" }), events: [] };
+      if (ev.date !== currentDateKey) {
+        currentDateKey = ev.date;
+        const d = parseDate(ev.date);
+        let label;
+        if (ev.date === today) label = "Today";
+        else if (ev.date === yesterday) label = "Yesterday";
+        else label = d.toLocaleDateString("default", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+        currentGroup = { label, events: [] };
         groups.push(currentGroup);
       }
       currentGroup.events.push(ev);
@@ -4635,10 +4632,10 @@ export default function HabitTracker() {
                   </button>
                 )}
 
-                {/* Timeline */}
+                {/* Notes */}
                 {timelineGroups.length === 0 ? (
                   <div className="detail-fade-4 text-sm text-center py-8" style={{ color: "#6E6E6A" }}>
-                    No history yet — complete this habit to start building your timeline.
+                    No notes yet — add one to start keeping track of how this habit's going.
                   </div>
                 ) : (
                   <div className="detail-fade-4 flex flex-col gap-6">
@@ -4654,54 +4651,35 @@ export default function HabitTracker() {
                                 className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center"
                                 style={{ background: h.color }}
                               >
-                                {ev.kind === "note" ? (
-                                  <HabitIcon size={16} color="#000000" />
-                                ) : (
-                                  <HabitIcon size={16} color="#000000" />
-                                )}
+                                <HabitIcon size={16} color="#000000" />
                               </div>
                               <div
-                                onClick={ev.kind === "note" ? () => openNoteModal(h, ev.date, ev.noteId) : undefined}
+                                onClick={() => openNoteModal(h, ev.date, ev.noteId)}
                                 className="flex-1 rounded-lg px-4 py-3"
                                 style={{
                                   background: "#0D0D0D",
                                   border: "1px solid #242422",
-                                  cursor: ev.kind === "note" ? "pointer" : "default",
+                                  cursor: "pointer",
                                 }}
                               >
-                                {ev.kind === "note" ? (
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="text-sm truncate" style={{ color: h.color, fontWeight: 600 }}>
-                                        {h.name}
-                                      </div>
-                                      <div className="text-sm mt-1" style={{ color: "#EDEDEA", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                        {ev.text}
-                                      </div>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="text-sm truncate" style={{ color: h.color, fontWeight: 600 }}>
+                                      {h.name}
                                     </div>
-                                    <span className="text-xs shrink-0 text-right flex flex-col items-end gap-1" style={{ color: "#6E6E6A" }}>
-                                      <Pencil size={11} color="#6E6E6A" />
-                                      <div>{parseDate(ev.date).toLocaleDateString("default", { day: "numeric", month: "short" })}</div>
-                                      {ev.time && (
-                                        <div className="mt-0.5">
-                                          {new Date(ev.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}
-                                        </div>
-                                      )}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <Flame size={14} color={YELLOW} fill={YELLOW} />
-                                      <span className="text-sm truncate" style={{ color: YELLOW, fontWeight: 600 }}>
-                                        {ev.length} day{ev.length === 1 ? "" : "s"} {ev.kind === "ongoing" ? "ongoing streak" : "streak ended"}
-                                      </span>
+                                    <div className="text-sm mt-1" style={{ color: "#EDEDEA", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                      {ev.text}
                                     </div>
-                                    <span className="text-xs shrink-0" style={{ color: "#6E6E6A" }}>
-                                      {parseDate(ev.date).toLocaleDateString("default", { day: "numeric", month: "short" })}
-                                    </span>
                                   </div>
-                                )}
+                                  <span className="text-xs shrink-0 text-right flex flex-col items-end gap-1" style={{ color: "#6E6E6A" }}>
+                                    <Pencil size={11} color="#6E6E6A" />
+                                    {ev.time && (
+                                      <div>
+                                        {new Date(ev.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}
+                                      </div>
+                                    )}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           ))}
