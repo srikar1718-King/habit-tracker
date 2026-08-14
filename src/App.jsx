@@ -1111,6 +1111,8 @@ export default function HabitTracker() {
   const audioCtxRef = useRef(null);
   const googleButtonRef = useRef(null);
   const backupFileInputRef = useRef(null);
+  const allowExitRef = useRef(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
 
   function getAudioContext() {
     if (!audioCtxRef.current) {
@@ -1131,6 +1133,133 @@ export default function HabitTracker() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Back-button handling: pressing back closes whatever's open on top
+  // (a modal, the detail view, the Archive tab...) instead of leaving the
+  // app. Only when nothing is open — the bare Home screen — does back
+  // trigger an "Exit Strata?" confirmation, and only a "Yes" there lets the
+  // browser actually navigate away.
+  useEffect(() => {
+    window.history.pushState({ strataGuard: true }, "");
+
+    const closeTopmostView = () => {
+      // Highest-priority (most "on top") first.
+      if (showExitConfirm) {
+        setShowExitConfirm(false);
+        return true;
+      }
+      if (trophyUnlock) {
+        setTrophyUnlock(null);
+        return true;
+      }
+      if (percentPrompt) {
+        declinePercentPrompt();
+        return true;
+      }
+      if (completeHabitConfirm) {
+        cancelCompleteHabit();
+        return true;
+      }
+      if (deleteTarget) {
+        setDeleteTarget(null);
+        return true;
+      }
+      if (percentEditHabit) {
+        setPercentEditHabit(null);
+        return true;
+      }
+      if (quantityEditHabit) {
+        setQuantityEditHabit(null);
+        return true;
+      }
+      if (noteModalHabit) {
+        setNoteModalHabit(null);
+        setNoteModalDate(null);
+        setNoteEditingId(null);
+        return true;
+      }
+      if (milestoneGoalQueue.length > 0) {
+        setMilestoneGoalQueue((q) => q.slice(1));
+        return true;
+      }
+      if (showTrendGraph) {
+        setShowTrendGraph(false);
+        return true;
+      }
+      if (calendarHabit) {
+        setCalendarHabit(null);
+        return true;
+      }
+      if (statsHabit) {
+        setStatsHabit(null);
+        return true;
+      }
+      if (achievementsHabit) {
+        setAchievementsHabit(null);
+        return true;
+      }
+      if (showAccountModal) {
+        setShowAccountModal(false);
+        return true;
+      }
+      if (showNavMenu) {
+        setShowNavMenu(false);
+        return true;
+      }
+      if (showAddModal) {
+        closeAddModal();
+        return true;
+      }
+      if (detailHabit) {
+        closeDetail();
+        return true;
+      }
+      if (currentView !== "home") {
+        setCurrentView("home");
+        return true;
+      }
+      return false;
+    };
+
+    const handlePopState = () => {
+      if (allowExitRef.current) return; // user already confirmed — let this one through
+
+      const closedSomething = closeTopmostView();
+      if (!closedSomething) {
+        setShowExitConfirm(true);
+      }
+      // Re-plant a guard so the next back press is caught too.
+      window.history.pushState({ strataGuard: true }, "");
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    showExitConfirm,
+    trophyUnlock,
+    percentPrompt,
+    completeHabitConfirm,
+    deleteTarget,
+    percentEditHabit,
+    quantityEditHabit,
+    noteModalHabit,
+    milestoneGoalQueue,
+    showTrendGraph,
+    calendarHabit,
+    statsHabit,
+    achievementsHabit,
+    showAccountModal,
+    showNavMenu,
+    showAddModal,
+    detailHabit,
+    currentView,
+  ]);
+
+  const confirmExit = () => {
+    allowExitRef.current = true;
+    window.history.back();
+  };
 
   async function load() {
     setLoading(true);
@@ -4382,7 +4511,7 @@ export default function HabitTracker() {
                                   </div>
                                   <Pencil size={12} color="#6E6E6A" style={{ flexShrink: 0, marginTop: "2px" }} />
                                 </div>
-                                <div className="text-sm" style={{ color: "#EDEDEA" }}>
+                                <div className="text-sm" style={{ color: "#EDEDEA", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                                   {note.text}
                                 </div>
                               </button>
@@ -4546,7 +4675,7 @@ export default function HabitTracker() {
                                       <div className="text-sm truncate" style={{ color: h.color, fontWeight: 600 }}>
                                         {h.name}
                                       </div>
-                                      <div className="text-sm mt-1" style={{ color: "#EDEDEA" }}>
+                                      <div className="text-sm mt-1" style={{ color: "#EDEDEA", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                                         {ev.text}
                                       </div>
                                     </div>
@@ -5789,6 +5918,59 @@ export default function HabitTracker() {
                 style={{ background: completeHabitConfirm.color, color: "#000000", fontWeight: 600 }}
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Exit app confirmation (back button on the bare Home screen) */}
+      {showExitConfirm && (
+        <div
+          onClick={() => setShowExitConfirm(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 90,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-pop"
+            style={{
+              background: "#0D0D0D",
+              border: "1px solid #242422",
+              borderRadius: "14px",
+              padding: "20px",
+              width: "100%",
+              maxWidth: "320px",
+            }}
+          >
+            <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+              Exit Strata?
+            </div>
+            <div className="text-xs mb-5" style={{ color: "#8A8A85" }}>
+              Your progress is already saved — this just closes the app.
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowExitConfirm(false)}
+                className="flex-1 rounded-md py-2 text-sm"
+                style={{ background: "transparent", border: "1px solid #3A3A35", color: "#EDEDEA" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmExit}
+                className="flex-1 rounded-md py-2 text-sm"
+                style={{ background: "#E5484D", color: "#000000", fontWeight: 600 }}
+              >
+                Yes, exit
               </button>
             </div>
           </div>
