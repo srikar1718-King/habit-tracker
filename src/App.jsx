@@ -54,6 +54,7 @@ import {
   Upload,
   Menu,
   Archive,
+  Info,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -1038,6 +1039,7 @@ export default function HabitTracker() {
   const [goalFromId, setGoalFromId] = useState(null);
   const [goalToId, setGoalToId] = useState(null);
   const [statsHabit, setStatsHabit] = useState(null);
+  const [infoHabit, setInfoHabit] = useState(null);
   const [noteModalHabit, setNoteModalHabit] = useState(null);
   const [noteInputValue, setNoteInputValue] = useState("");
   const [noteModalDate, setNoteModalDate] = useState(null);
@@ -2381,7 +2383,12 @@ export default function HabitTracker() {
 
   const visibleHabits = habits
     .filter((h) => isVisibleOn(h, selectedDate) && (selectedCategory === "All" || habitCategory(h) === selectedCategory))
-    .sort((a, b) => habitDoneScore(b, selectedDate, selectedRecord) - habitDoneScore(a, selectedDate, selectedRecord));
+    .sort((a, b) => {
+      const aIsMilestone = a.frequency?.type === "milestone";
+      const bIsMilestone = b.frequency?.type === "milestone";
+      if (aIsMilestone !== bIsMilestone) return aIsMilestone ? 1 : -1; // milestone habits always sit at the bottom
+      return habitDoneScore(b, selectedDate, selectedRecord) - habitDoneScore(a, selectedDate, selectedRecord);
+    });
   const selectedDoneCount = visibleHabits.filter((h) => !!selectedRecord[h.id]).length;
   const selectedTotalCount = visibleHabits.length;
   const selectedIsToday = selectedDate === today;
@@ -3059,36 +3066,24 @@ export default function HabitTracker() {
                       }}
                     >
                       <HabitIcon size={19} color={h.color} />
-                      {(() => {
-                        const unlockedCount = getEffectiveLevels(h).filter((l) => computeAchievementProgress(h) >= l.threshold).length;
-                        return (
-                          <div
-                            className="flex items-center gap-0.5"
-                            style={{
-                              position: "absolute",
-                              top: "-6px",
-                              right: "-8px",
-                              background: unlockedCount > 0 ? "#0D0D0D" : "#141412",
-                              border: `1px solid ${unlockedCount > 0 ? YELLOW : "#242422"}`,
-                              borderRadius: "999px",
-                              padding: "1px 5px",
-                            }}
-                          >
-                            <Trophy size={9} color={unlockedCount > 0 ? YELLOW : "#4A4A45"} />
-                            <span className="mono" style={{ fontSize: "9px", color: unlockedCount > 0 ? YELLOW : "#4A4A45", fontWeight: 700 }}>
-                              {unlockedCount}
-                            </span>
-                          </div>
-                        );
-                      })()}
                     </div>
                     {!isMilestoneHabit && (
-                      <span
+                      <div
                         className="mono"
-                        style={{ fontSize: "9px", color: "#6E6E6A", marginTop: "4px", fontWeight: 600, whiteSpace: "nowrap" }}
+                        style={{
+                          fontSize: "12px",
+                          color: h.color,
+                          fontWeight: 800,
+                          marginTop: "5px",
+                          whiteSpace: "nowrap",
+                          background: hexToRgba(h.color, 0.18),
+                          padding: "2px 6px",
+                          borderRadius: "999px",
+                          boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.4)} inset`,
+                        }}
                       >
                         {computeTotalDays(h)}d
-                      </span>
+                      </div>
                     )}
                     {(() => {
                       const totalDaysDone = computeAchievementProgress(h);
@@ -4092,14 +4087,24 @@ export default function HabitTracker() {
                   <button onClick={closeDetail} aria-label="Back" style={{ color: "#EDEDEA" }}>
                     <ArrowLeft size={22} />
                   </button>
-                  <button
-                    onClick={() => openEditModal(h)}
-                    aria-label="Edit habit"
-                    className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
-                    style={{ border: "1px solid #242422", color: "#EDEDEA" }}
-                  >
-                    <Pencil size={15} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setInfoHabit(h)}
+                      aria-label="Habit info"
+                      className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                      style={{ border: "1px solid #242422", color: "#EDEDEA" }}
+                    >
+                      <Info size={15} />
+                    </button>
+                    <button
+                      onClick={() => openEditModal(h)}
+                      aria-label="Edit habit"
+                      className="icon-action-btn w-9 h-9 rounded-full flex items-center justify-center"
+                      style={{ border: "1px solid #242422", color: "#EDEDEA" }}
+                    >
+                      <Pencil size={15} />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Icon, name, status */}
@@ -4690,6 +4695,123 @@ export default function HabitTracker() {
                 )}
                   </>
                 )}
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* Info modal — creation date and a full summary of the habit's settings */}
+      {infoHabit &&
+        (() => {
+          const h = habits.find((x) => x.id === infoHabit.id) || infoHabit;
+          const HabitIcon = getIcon(h.icon);
+          const isMs = h.frequency?.type === "milestone";
+
+          let frequencyLabel = "Every day";
+          if (h.frequency?.type === "once") {
+            frequencyLabel = h.frequency.date
+              ? `Once, on ${parseDate(h.frequency.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}`
+              : "Once";
+          } else if (h.frequency?.type === "milestone") {
+            frequencyLabel = "Milestone-based";
+          } else if (h.frequency?.type === "specific_days") {
+            frequencyLabel =
+              h.frequency.days && h.frequency.days.length > 0
+                ? h.frequency.days.map((d) => WEEKDAYS.find((w) => w.key === d)?.label || d).join(", ")
+                : "No days selected";
+          }
+
+          const rows = [
+            { label: "Created", value: h.createdAt ? new Date(h.createdAt).toLocaleDateString("default", { month: "long", day: "numeric", year: "numeric" }) : "Before this was tracked" },
+            { label: "Category", value: habitCategory(h) },
+            { label: "Frequency", value: frequencyLabel },
+            ...(h.description ? [{ label: "Description", value: h.description }] : []),
+            ...(h.reminder?.enabled
+              ? [{ label: "Reminder", value: `${h.reminder.time || ""} on ${(h.reminder.days || []).map((d) => WEEKDAYS.find((w) => w.key === d)?.label || d).join(", ") || "no days set"}` }]
+              : []),
+            ...(h.quantityTracking?.enabled ? [{ label: "Tracks quantity", value: h.quantityTracking.label || "Yes" }] : []),
+            ...(isMs ? [{ label: "Milestones", value: `${computeMilestoneCompletedCount(h)}/${(h.milestones || []).length} completed` }] : []),
+            ...(h.completed
+              ? [{ label: isMs ? "Completed" : "Archived", value: h.completedDate ? new Date(parseDate(h.completedDate)).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" }) : "Yes" }]
+              : []),
+          ];
+
+          return (
+            <div
+              onClick={() => setInfoHabit(null)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.65)",
+                zIndex: 60,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "24px",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="modal-pop"
+                style={{
+                  background: "#0D0D0D",
+                  border: "1px solid #242422",
+                  borderRadius: "14px",
+                  padding: "20px",
+                  width: "100%",
+                  maxWidth: "380px",
+                  maxHeight: "80vh",
+                  overflowY: "auto",
+                }}
+              >
+                <div className="flex items-center justify-between mb-5">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                      style={{
+                        backgroundColor: hexToRgba(h.color, 0.14),
+                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
+                      }}
+                    >
+                      <HabitIcon size={17} color={h.color} />
+                    </div>
+                    <span className="text-sm truncate" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                      {h.name}
+                    </span>
+                  </div>
+                  <button onClick={() => setInfoHabit(null)} aria-label="Close" style={{ color: "#8A8A85", flexShrink: 0 }}>
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-4 mb-5">
+                  <div>
+                    <div className="text-xs mb-1.5" style={{ color: "#8A8A85" }}>
+                      Difficulty
+                    </div>
+                    <StarDisplay value={h.difficulty} />
+                  </div>
+                  <div>
+                    <div className="text-xs mb-1.5" style={{ color: "#8A8A85" }}>
+                      Importance
+                    </div>
+                    <StarDisplay value={h.importance || 3} />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {rows.map((row) => (
+                    <div key={row.label} className="flex items-start justify-between gap-4">
+                      <span className="text-xs shrink-0" style={{ color: "#8A8A85" }}>
+                        {row.label}
+                      </span>
+                      <span className="text-sm text-right" style={{ color: "#EDEDEA" }}>
+                        {row.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           );
