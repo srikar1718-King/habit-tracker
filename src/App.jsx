@@ -55,6 +55,8 @@ import {
   Menu,
   Archive,
   Info,
+  Calculator,
+  DollarSign,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -76,6 +78,7 @@ const QUANTITY_KEY = "quantity-records";
 const MILESTONES_KEY = "milestone-completions";
 const MILESTONE_TARGETS_KEY = "milestone-daily-targets";
 const MILESTONE_TIMES_KEY = "milestone-completion-times";
+const EXPENSES_KEY = "expense-entries";
 const WEEKS_COMPACT = 26;
 const WEEKS_DETAIL = 52;
 const LONG_PRESS_MS = 550;
@@ -245,6 +248,10 @@ const HABIT_CATEGORIES = [
   "Finance", "Social", "Creativity", "Home", "Sleep", "Nutrition", "Career",
 ];
 const UNCATEGORIZED = "Uncategorized";
+
+const EXPENSE_CATEGORIES = [
+  "Food", "Transport", "Bills", "Shopping", "Health", "Entertainment", "Other",
+];
 
 const COLORS = [
   "#5FCB6C", "#F2C94C", "#EE6C4D", "#E5484D", "#4EA8DE",
@@ -1033,6 +1040,10 @@ export default function HabitTracker() {
   // user targeted to complete on a given day, for a milestone-type habit.
   const [milestoneTargets, setMilestoneTargets] = useState({});
   const [milestoneCompletionTimes, setMilestoneCompletionTimes] = useState({});
+  const [expenses, setExpenses] = useState([]);
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseDescription, setExpenseDescription] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
   // Queue of milestone habits still needing today's goal set, shown one at a
   // time; [{ habit }] — first entry is the one currently prompted.
   const [milestoneGoalQueue, setMilestoneGoalQueue] = useState([]);
@@ -1305,6 +1316,11 @@ export default function HabitTracker() {
       const mctRes = await window.storage.get(MILESTONE_TIMES_KEY, false);
       if (mctRes) mct = JSON.parse(mctRes.value);
     } catch (e) {}
+    let ex = [];
+    try {
+      const exRes = await window.storage.get(EXPENSES_KEY, false);
+      if (exRes) ex = JSON.parse(exRes.value);
+    } catch (e) {}
 
     const todayRecord = { ...(r[today] || {}) };
     h.forEach((hb) => {
@@ -1322,6 +1338,7 @@ export default function HabitTracker() {
     setMilestoneCompletions(m);
     setMilestoneTargets(mt);
     setMilestoneCompletionTimes(mct);
+    setExpenses(ex);
     setLoading(false);
 
     // Any milestone habit that still has milestones left, and doesn't have
@@ -1419,6 +1436,37 @@ export default function HabitTracker() {
     }
   }
 
+  async function persistExpenses(newExpenses) {
+    setExpenses(newExpenses);
+    try {
+      await window.storage.set(EXPENSES_KEY, JSON.stringify(newExpenses), false);
+    } catch (e) {
+      console.error("Failed to save expenses:", e);
+    }
+  }
+
+  const addExpense = () => {
+    const amount = parseFloat(expenseAmount);
+    if (!amount || amount <= 0) return;
+    playConfirmSound(getAudioContext());
+    const entry = {
+      id: Date.now() + Math.random(),
+      amount,
+      description: expenseDescription.trim(),
+      category: expenseCategory,
+      date: today,
+      time: Date.now(),
+    };
+    persistExpenses([entry, ...expenses]);
+    setExpenseAmount("");
+    setExpenseDescription("");
+  };
+
+  const deleteExpense = (id) => {
+    playDeleteSound(getAudioContext());
+    persistExpenses(expenses.filter((e) => e.id !== id));
+  };
+
   // Bundles every piece of stored data into one downloadable file. This is
   // the actual working way to move progress to a new device: export here,
   // transfer the file however you like (email, Drive, AirDrop...), then
@@ -1436,6 +1484,7 @@ export default function HabitTracker() {
         milestoneCompletions,
         milestoneTargets,
         milestoneCompletionTimes,
+        expenses,
       },
     };
     try {
@@ -1476,6 +1525,7 @@ export default function HabitTracker() {
       await persistMilestoneCompletions(d.milestoneCompletions || {});
       await persistMilestoneTargets(d.milestoneTargets || {});
       await persistMilestoneCompletionTimes(d.milestoneCompletionTimes || {});
+      await persistExpenses(d.expenses || []);
       setBackupMessage("Backup restored.");
     } catch (e) {
       console.error("Import failed:", e);
@@ -1924,6 +1974,20 @@ export default function HabitTracker() {
           rec[editingHabitId] = false;
         }
         persistRecords({ ...records, [targetDate]: rec });
+      }
+      // If the number of milestones changed (added or removed one), today's
+      // goal may no longer make sense — clear it and ask again.
+      if (frequency.type === "milestone") {
+        const oldCount = (existingHabitForEdit?.milestones || []).length;
+        if (milestones.length !== oldCount) {
+          const dayTargets = { ...(milestoneTargets[today] || {}) };
+          delete dayTargets[editingHabitId];
+          persistMilestoneTargets({ ...milestoneTargets, [today]: dayTargets });
+          const updatedHabit = newHabits.find((h) => h.id === editingHabitId);
+          if (updatedHabit && milestones.length > 0) {
+            setMilestoneGoalQueue((q) => (q.some((it) => it.habit.id === editingHabitId) ? q : [...q, { habit: updatedHabit }]));
+          }
+        }
       }
       resetAddForm();
       setShowAddModal(false);
@@ -3071,50 +3135,20 @@ export default function HabitTracker() {
                       <div
                         className="mono"
                         style={{
-                          fontSize: "12px",
+                          fontSize: "9px",
                           color: h.color,
-                          fontWeight: 800,
-                          marginTop: "5px",
+                          fontWeight: 700,
+                          marginTop: "4px",
                           whiteSpace: "nowrap",
-                          background: hexToRgba(h.color, 0.18),
-                          padding: "2px 6px",
+                          background: hexToRgba(h.color, 0.16),
+                          padding: "1px 5px",
                           borderRadius: "999px",
-                          boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.4)} inset`,
+                          boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.35)} inset`,
                         }}
                       >
                         {computeTotalDays(h)}d
                       </div>
                     )}
-                    {(() => {
-                      const totalDaysDone = computeAchievementProgress(h);
-                      const unlocked = getEffectiveLevels(h).filter((l) => totalDaysDone >= l.threshold);
-                      const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
-                      if (!topLevel) return null;
-                      return (
-                        <div className="flex flex-col items-center" style={{ marginTop: "5px" }}>
-                          <div
-                            style={{
-                              width: "24px",
-                              height: "26px",
-                              clipPath: "polygon(50% 0%, 100% 20%, 100% 68%, 50% 100%, 0% 68%, 0% 20%)",
-                              background: `linear-gradient(160deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 38%), linear-gradient(150deg, ${lightenColor(topLevel.color, 0.5)}, ${topLevel.color})`,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              boxShadow: `0 2px 6px ${hexToRgba(topLevel.color, 0.55)}, inset 1px 1px 2px rgba(255,255,255,0.55), inset -1px -1px 2px rgba(0,0,0,0.35)`,
-                            }}
-                          >
-                            <Star size={11} color={darkenColor(topLevel.color, 0.55)} fill={darkenColor(topLevel.color, 0.55)} strokeWidth={2.5} />
-                          </div>
-                          <span
-                            className="mono"
-                            style={{ fontSize: "8px", color: topLevel.color, fontWeight: 700, marginTop: "2px", whiteSpace: "nowrap" }}
-                          >
-                            {topLevel.label}
-                          </span>
-                        </div>
-                      );
-                    })()}
                   </div>
 
                   <div className="flex-1 min-w-0">
@@ -3422,6 +3456,169 @@ export default function HabitTracker() {
             </div>
           );
         })()}
+
+        {/* Expense calculator view */}
+        {currentView === "calculator" &&
+          (() => {
+            const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
+            const todaySpent = expenses.filter((e) => e.date === today).reduce((sum, e) => sum + e.amount, 0);
+            const monthKey = today.slice(0, 7); // "YYYY-MM"
+            const monthSpent = expenses.filter((e) => e.date.startsWith(monthKey)).reduce((sum, e) => sum + e.amount, 0);
+            const sortedExpenses = [...expenses].sort((a, b) => (b.time || 0) - (a.time || 0));
+
+            return (
+              <div>
+                <div className="text-xs mono tracking-wide mb-4 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                  <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
+                  CALCULATOR
+                </div>
+
+                <div
+                  className="rounded-lg p-5 mb-4"
+                  style={{
+                    backgroundColor: "#0D0D0D",
+                    backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
+                    border: "1px solid #242422",
+                  }}
+                >
+                  <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
+                    Total spent
+                  </div>
+                  <div className="mono text-3xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                    ${totalSpent.toFixed(2)}
+                  </div>
+                  <div className="flex gap-4 mt-3">
+                    <div>
+                      <div className="text-xs" style={{ color: "#8A8A85" }}>
+                        Today
+                      </div>
+                      <div className="mono text-sm" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
+                        ${todaySpent.toFixed(2)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs" style={{ color: "#8A8A85" }}>
+                        This month
+                      </div>
+                      <div className="mono text-sm" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
+                        ${monthSpent.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                  <div className="flex gap-2 mb-3">
+                    <div
+                      className="flex items-center rounded-lg px-3"
+                      style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
+                    >
+                      <DollarSign size={14} color="#6E6E6A" style={{ flexShrink: 0 }} />
+                      <input
+                        value={expenseAmount}
+                        onChange={(e) => setExpenseAmount(e.target.value)}
+                        type="number"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        className="w-full bg-transparent py-2.5 text-sm"
+                        style={{ color: "#EDEDEA", outline: "none" }}
+                      />
+                    </div>
+                    <input
+                      value={expenseDescription}
+                      onChange={(e) => setExpenseDescription(e.target.value)}
+                      placeholder="What was it for?"
+                      className="flex-1 rounded-lg px-3 py-2.5 text-sm min-w-0"
+                      style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {EXPENSE_CATEGORIES.map((cat) => {
+                      const active = expenseCategory === cat;
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() => setExpenseCategory(cat)}
+                          className="rounded-full px-3 py-1 text-xs"
+                          style={{
+                            background: active ? ACCENT_GREEN : "#151513",
+                            border: `1px solid ${active ? ACCENT_GREEN : "#262622"}`,
+                            color: active ? "#000000" : "#8A8A85",
+                            fontWeight: active ? 700 : 500,
+                          }}
+                        >
+                          {cat}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={addExpense}
+                    disabled={!expenseAmount || parseFloat(expenseAmount) <= 0}
+                    className="w-full rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm"
+                    style={{
+                      background: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#1C1C19" : ACCENT_GREEN,
+                      color: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#4A4A47" : "#000000",
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Plus size={15} strokeWidth={2.5} />
+                    Add expense
+                  </button>
+                </div>
+
+                {sortedExpenses.length === 0 ? (
+                  <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                    No expenses logged yet.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {sortedExpenses.map((e) => (
+                      <div
+                        key={e.id}
+                        className="rounded-lg p-3 flex items-center gap-3"
+                        style={{ background: "#141412", border: "1px solid #242422" }}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                              ${e.amount.toFixed(2)}
+                            </span>
+                            <span
+                              className="text-xs rounded-full px-2 py-0.5"
+                              style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+                            >
+                              {e.category}
+                            </span>
+                          </div>
+                          {e.description && (
+                            <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
+                              {e.description}
+                            </div>
+                          )}
+                          <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
+                            {e.date === today
+                              ? "Today"
+                              : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                            {e.time &&
+                              ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => deleteExpense(e.id)}
+                          aria-label="Delete expense"
+                          className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+                          style={{ color: "#8A8A85" }}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
       </div>
 
       {/* Floating add button */}
@@ -5830,6 +6027,21 @@ export default function HabitTracker() {
             >
               <Archive size={16} />
               Archive
+            </button>
+            <button
+              onClick={() => {
+                setCurrentView("calculator");
+                setShowNavMenu(false);
+              }}
+              className="w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 text-sm mt-1"
+              style={{
+                background: currentView === "calculator" ? hexToRgba(ACCENT_GREEN, 0.16) : "transparent",
+                color: currentView === "calculator" ? ACCENT_GREEN : "#EDEDEA",
+                fontWeight: currentView === "calculator" ? 700 : 500,
+              }}
+            >
+              <Calculator size={16} />
+              Calculator
             </button>
           </div>
         </div>
