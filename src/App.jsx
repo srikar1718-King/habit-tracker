@@ -56,7 +56,6 @@ import {
   Archive,
   Info,
   Calculator,
-  DollarSign,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -79,6 +78,9 @@ const MILESTONES_KEY = "milestone-completions";
 const MILESTONE_TARGETS_KEY = "milestone-daily-targets";
 const MILESTONE_TIMES_KEY = "milestone-completion-times";
 const EXPENSES_KEY = "expense-entries";
+const CURRENCY_KEY = "expense-currency";
+const INCOME_KEY = "income-entries";
+const DAILY_BUDGET_KEY = "daily-budgets";
 const WEEKS_COMPACT = 26;
 const WEEKS_DETAIL = 52;
 const LONG_PRESS_MS = 550;
@@ -251,6 +253,10 @@ const UNCATEGORIZED = "Uncategorized";
 
 const EXPENSE_CATEGORIES = [
   "Food", "Transport", "Bills", "Shopping", "Health", "Entertainment", "Other",
+];
+
+const INCOME_CATEGORIES = [
+  "Salary", "Freelance", "Business", "Investment", "Gift", "Other",
 ];
 
 const COLORS = [
@@ -1044,6 +1050,15 @@ export default function HabitTracker() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDescription, setExpenseDescription] = useState("");
   const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [currency, setCurrency] = useState(null); // "USD" | "INR" — null until the user picks one
+  const [incomes, setIncomes] = useState([]);
+  const [incomeAmount, setIncomeAmount] = useState("");
+  const [incomeDescription, setIncomeDescription] = useState("");
+  const [incomeCategory, setIncomeCategory] = useState(INCOME_CATEGORIES[0]);
+  const [calculatorTab, setCalculatorTab] = useState("expense"); // "expense" | "income"
+  const [dailyBudgets, setDailyBudgets] = useState({}); // { [dateStr]: amount }
+  const [showBudgetInput, setShowBudgetInput] = useState(false);
+  const [budgetInputValue, setBudgetInputValue] = useState("");
   // Queue of milestone habits still needing today's goal set, shown one at a
   // time; [{ habit }] — first entry is the one currently prompted.
   const [milestoneGoalQueue, setMilestoneGoalQueue] = useState([]);
@@ -1321,6 +1336,21 @@ export default function HabitTracker() {
       const exRes = await window.storage.get(EXPENSES_KEY, false);
       if (exRes) ex = JSON.parse(exRes.value);
     } catch (e) {}
+    let curr = null;
+    try {
+      const currRes = await window.storage.get(CURRENCY_KEY, false);
+      if (currRes) curr = JSON.parse(currRes.value);
+    } catch (e) {}
+    let inc = [];
+    try {
+      const incRes = await window.storage.get(INCOME_KEY, false);
+      if (incRes) inc = JSON.parse(incRes.value);
+    } catch (e) {}
+    let budgets = {};
+    try {
+      const budgetRes = await window.storage.get(DAILY_BUDGET_KEY, false);
+      if (budgetRes) budgets = JSON.parse(budgetRes.value);
+    } catch (e) {}
 
     const todayRecord = { ...(r[today] || {}) };
     h.forEach((hb) => {
@@ -1339,6 +1369,9 @@ export default function HabitTracker() {
     setMilestoneTargets(mt);
     setMilestoneCompletionTimes(mct);
     setExpenses(ex);
+    setCurrency(curr);
+    setIncomes(inc);
+    setDailyBudgets(budgets);
     setLoading(false);
 
     // Any milestone habit that still has milestones left, and doesn't have
@@ -1445,6 +1478,16 @@ export default function HabitTracker() {
     }
   }
 
+  async function persistCurrency(newCurrency) {
+    playClickSound(getAudioContext());
+    setCurrency(newCurrency);
+    try {
+      await window.storage.set(CURRENCY_KEY, JSON.stringify(newCurrency), false);
+    } catch (e) {
+      console.error("Failed to save currency:", e);
+    }
+  }
+
   const addExpense = () => {
     const amount = parseFloat(expenseAmount);
     if (!amount || amount <= 0) return;
@@ -1467,6 +1510,62 @@ export default function HabitTracker() {
     persistExpenses(expenses.filter((e) => e.id !== id));
   };
 
+  async function persistIncomes(newIncomes) {
+    setIncomes(newIncomes);
+    try {
+      await window.storage.set(INCOME_KEY, JSON.stringify(newIncomes), false);
+    } catch (e) {
+      console.error("Failed to save income:", e);
+    }
+  }
+
+  const addIncome = () => {
+    const amount = parseFloat(incomeAmount);
+    if (!amount || amount <= 0) return;
+    playConfirmSound(getAudioContext());
+    const entry = {
+      id: Date.now() + Math.random(),
+      amount,
+      description: incomeDescription.trim(),
+      category: incomeCategory,
+      date: today,
+      time: Date.now(),
+    };
+    persistIncomes([entry, ...incomes]);
+    setIncomeAmount("");
+    setIncomeDescription("");
+  };
+
+  const deleteIncome = (id) => {
+    playDeleteSound(getAudioContext());
+    persistIncomes(incomes.filter((e) => e.id !== id));
+  };
+
+  async function persistDailyBudgets(newBudgets) {
+    setDailyBudgets(newBudgets);
+    try {
+      await window.storage.set(DAILY_BUDGET_KEY, JSON.stringify(newBudgets), false);
+    } catch (e) {
+      console.error("Failed to save daily budget:", e);
+    }
+  }
+
+  const setTodayBudget = () => {
+    const amount = parseFloat(budgetInputValue);
+    if (!amount || amount <= 0) return;
+    playConfirmSound(getAudioContext());
+    persistDailyBudgets({ ...dailyBudgets, [today]: amount });
+    setBudgetInputValue("");
+    setShowBudgetInput(false);
+  };
+
+  const clearTodayBudget = () => {
+    playDeleteSound(getAudioContext());
+    const next = { ...dailyBudgets };
+    delete next[today];
+    persistDailyBudgets(next);
+  };
+
   // Bundles every piece of stored data into one downloadable file. This is
   // the actual working way to move progress to a new device: export here,
   // transfer the file however you like (email, Drive, AirDrop...), then
@@ -1485,6 +1584,9 @@ export default function HabitTracker() {
         milestoneTargets,
         milestoneCompletionTimes,
         expenses,
+        currency,
+        incomes,
+        dailyBudgets,
       },
     };
     try {
@@ -1526,6 +1628,9 @@ export default function HabitTracker() {
       await persistMilestoneTargets(d.milestoneTargets || {});
       await persistMilestoneCompletionTimes(d.milestoneCompletionTimes || {});
       await persistExpenses(d.expenses || []);
+      if (d.currency) await persistCurrency(d.currency);
+      await persistIncomes(d.incomes || []);
+      await persistDailyBudgets(d.dailyBudgets || {});
       setBackupMessage("Backup restored.");
     } catch (e) {
       console.error("Import failed:", e);
@@ -3460,17 +3565,75 @@ export default function HabitTracker() {
         {/* Expense calculator view */}
         {currentView === "calculator" &&
           (() => {
-            const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
-            const todaySpent = expenses.filter((e) => e.date === today).reduce((sum, e) => sum + e.amount, 0);
+            if (!currency) {
+              return (
+                <div>
+                  <div className="text-xs mono tracking-wide mb-4 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                    <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
+                    CALCULATOR
+                  </div>
+                  <div className="rounded-lg p-6 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                    <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                      Which currency do you want to track?
+                    </div>
+                    <div className="text-xs mb-5" style={{ color: "#8A8A85" }}>
+                      You can change this anytime.
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => persistCurrency("USD")}
+                        className="flex-1 rounded-lg py-4 flex flex-col items-center gap-1"
+                        style={{ background: "#151513", border: "1px solid #262622" }}
+                      >
+                        <span className="mono text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                          $
+                        </span>
+                        <span className="text-xs" style={{ color: "#8A8A85" }}>
+                          US Dollar
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => persistCurrency("INR")}
+                        className="flex-1 rounded-lg py-4 flex flex-col items-center gap-1"
+                        style={{ background: "#151513", border: "1px solid #262622" }}
+                      >
+                        <span className="mono text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                          ₹
+                        </span>
+                        <span className="text-xs" style={{ color: "#8A8A85" }}>
+                          Indian Rupee
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            const currencySymbol = currency === "INR" ? "₹" : "$";
+            const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
+            const totalIncome = incomes.reduce((sum, e) => sum + e.amount, 0);
+            const netBalance = totalIncome - totalExpense;
             const monthKey = today.slice(0, 7); // "YYYY-MM"
-            const monthSpent = expenses.filter((e) => e.date.startsWith(monthKey)).reduce((sum, e) => sum + e.amount, 0);
+            const monthExpense = expenses.filter((e) => e.date.startsWith(monthKey)).reduce((sum, e) => sum + e.amount, 0);
+            const monthIncome = incomes.filter((e) => e.date.startsWith(monthKey)).reduce((sum, e) => sum + e.amount, 0);
+            const monthNet = monthIncome - monthExpense;
             const sortedExpenses = [...expenses].sort((a, b) => (b.time || 0) - (a.time || 0));
+            const sortedIncomes = [...incomes].sort((a, b) => (b.time || 0) - (a.time || 0));
+            const todayExpense = expenses.filter((e) => e.date === today).reduce((sum, e) => sum + e.amount, 0);
+            const todayBudget = dailyBudgets[today];
+            const budgetRemaining = todayBudget !== undefined ? todayBudget - todayExpense : null;
 
             return (
               <div>
-                <div className="text-xs mono tracking-wide mb-4 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
-                  <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
-                  CALCULATOR
+                <div className="text-xs mono tracking-wide mb-4 flex items-center justify-between" style={{ color: "#6E6E6A" }}>
+                  <span className="flex items-center gap-1.5">
+                    <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
+                    CALCULATOR
+                  </span>
+                  <button onClick={() => setCurrency(null)} style={{ color: "#8A8A85", textDecoration: "underline" }}>
+                    {currency} ({currencySymbol}) · Change
+                  </button>
                 </div>
 
                 <div
@@ -3482,139 +3645,408 @@ export default function HabitTracker() {
                   }}
                 >
                   <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
-                    Total spent
+                    Balance
                   </div>
-                  <div className="mono text-3xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
-                    ${totalSpent.toFixed(2)}
+                  <div className="mono text-3xl" style={{ color: netBalance >= 0 ? ACCENT_GREEN : "#E5484D", fontWeight: 700 }}>
+                    {netBalance < 0 ? "-" : ""}
+                    {currencySymbol}
+                    {Math.abs(netBalance).toFixed(2)}
                   </div>
                   <div className="flex gap-4 mt-3">
                     <div>
                       <div className="text-xs" style={{ color: "#8A8A85" }}>
-                        Today
+                        Income
                       </div>
                       <div className="mono text-sm" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
-                        ${todaySpent.toFixed(2)}
+                        {currencySymbol}
+                        {totalIncome.toFixed(2)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs" style={{ color: "#8A8A85" }}>
+                        Expense
+                      </div>
+                      <div className="mono text-sm" style={{ color: "#E5484D", fontWeight: 600 }}>
+                        {currencySymbol}
+                        {totalExpense.toFixed(2)}
                       </div>
                     </div>
                     <div>
                       <div className="text-xs" style={{ color: "#8A8A85" }}>
                         This month
                       </div>
-                      <div className="mono text-sm" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
-                        ${monthSpent.toFixed(2)}
+                      <div className="mono text-sm" style={{ color: monthNet >= 0 ? ACCENT_GREEN : "#E5484D", fontWeight: 600 }}>
+                        {monthNet < 0 ? "-" : ""}
+                        {currencySymbol}
+                        {Math.abs(monthNet).toFixed(2)}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                  <div className="flex gap-2 mb-3">
-                    <div
-                      className="flex items-center rounded-lg px-3"
-                      style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
-                    >
-                      <DollarSign size={14} color="#6E6E6A" style={{ flexShrink: 0 }} />
-                      <input
-                        value={expenseAmount}
-                        onChange={(e) => setExpenseAmount(e.target.value)}
-                        type="number"
-                        inputMode="decimal"
-                        placeholder="0.00"
-                        className="w-full bg-transparent py-2.5 text-sm"
-                        style={{ color: "#EDEDEA", outline: "none" }}
-                      />
-                    </div>
-                    <input
-                      value={expenseDescription}
-                      onChange={(e) => setExpenseDescription(e.target.value)}
-                      placeholder="What was it for?"
-                      className="flex-1 rounded-lg px-3 py-2.5 text-sm min-w-0"
-                      style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {EXPENSE_CATEGORIES.map((cat) => {
-                      const active = expenseCategory === cat;
-                      return (
-                        <button
-                          key={cat}
-                          onClick={() => setExpenseCategory(cat)}
-                          className="rounded-full px-3 py-1 text-xs"
-                          style={{
-                            background: active ? ACCENT_GREEN : "#151513",
-                            border: `1px solid ${active ? ACCENT_GREEN : "#262622"}`,
-                            color: active ? "#000000" : "#8A8A85",
-                            fontWeight: active ? 700 : 500,
-                          }}
-                        >
-                          {cat}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="flex gap-2 mb-4">
                   <button
-                    onClick={addExpense}
-                    disabled={!expenseAmount || parseFloat(expenseAmount) <= 0}
-                    className="w-full rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm"
+                    onClick={() => setCalculatorTab("expense")}
+                    className="flex-1 rounded-lg py-2.5 text-sm"
                     style={{
-                      background: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#1C1C19" : ACCENT_GREEN,
-                      color: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#4A4A47" : "#000000",
-                      fontWeight: 700,
+                      background: calculatorTab === "expense" ? "#E5484D" : "#0D0D0D",
+                      border: `1px solid ${calculatorTab === "expense" ? "#E5484D" : "#242422"}`,
+                      color: calculatorTab === "expense" ? "#000000" : "#8A8A85",
+                      fontWeight: calculatorTab === "expense" ? 700 : 500,
                     }}
                   >
-                    <Plus size={15} strokeWidth={2.5} />
-                    Add expense
+                    Expense
+                  </button>
+                  <button
+                    onClick={() => setCalculatorTab("income")}
+                    className="flex-1 rounded-lg py-2.5 text-sm"
+                    style={{
+                      background: calculatorTab === "income" ? ACCENT_GREEN : "#0D0D0D",
+                      border: `1px solid ${calculatorTab === "income" ? ACCENT_GREEN : "#242422"}`,
+                      color: calculatorTab === "income" ? "#000000" : "#8A8A85",
+                      fontWeight: calculatorTab === "income" ? 700 : 500,
+                    }}
+                  >
+                    Income
                   </button>
                 </div>
 
-                {sortedExpenses.length === 0 ? (
-                  <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
-                    No expenses logged yet.
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {sortedExpenses.map((e) => (
-                      <div
-                        key={e.id}
-                        className="rounded-lg p-3 flex items-center gap-3"
-                        style={{ background: "#141412", border: "1px solid #242422" }}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
-                              ${e.amount.toFixed(2)}
-                            </span>
-                            <span
-                              className="text-xs rounded-full px-2 py-0.5"
-                              style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
-                            >
-                              {e.category}
-                            </span>
+                {calculatorTab === "expense" ? (
+                  <>
+                    {todayBudget === undefined ? (
+                      showBudgetInput ? (
+                        <div className="rounded-lg p-4 mb-4" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                          <div className="text-xs mb-2" style={{ color: "#8A8A85" }}>
+                            What's your budget for today?
                           </div>
-                          {e.description && (
-                            <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
-                              {e.description}
+                          <div className="flex gap-2">
+                            <div
+                              className="flex items-center rounded-lg px-3 flex-1"
+                              style={{ background: "#151513", border: "1px solid #262622" }}
+                            >
+                              <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "14px" }}>
+                                {currencySymbol}
+                              </span>
+                              <input
+                                autoFocus
+                                value={budgetInputValue}
+                                onChange={(e) => setBudgetInputValue(e.target.value)}
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="0.00"
+                                className="w-full bg-transparent py-2.5 text-sm"
+                                style={{ color: "#EDEDEA", outline: "none" }}
+                              />
                             </div>
-                          )}
-                          <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
-                            {e.date === today
-                              ? "Today"
-                              : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
-                            {e.time &&
-                              ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                            <button
+                              onClick={setTodayBudget}
+                              disabled={!budgetInputValue || parseFloat(budgetInputValue) <= 0}
+                              className="rounded-lg px-4 text-sm"
+                              style={{
+                                background: !budgetInputValue || parseFloat(budgetInputValue) <= 0 ? "#1C1C19" : ACCENT_GREEN,
+                                color: !budgetInputValue || parseFloat(budgetInputValue) <= 0 ? "#4A4A47" : "#000000",
+                                fontWeight: 700,
+                              }}
+                            >
+                              Set
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowBudgetInput(false);
+                                setBudgetInputValue("");
+                              }}
+                              className="rounded-lg px-3 text-sm"
+                              style={{ background: "transparent", border: "1px solid #3A3A35", color: "#8A8A85" }}
+                            >
+                              Cancel
+                            </button>
                           </div>
                         </div>
+                      ) : (
                         <button
-                          onClick={() => deleteExpense(e.id)}
-                          aria-label="Delete expense"
-                          className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
-                          style={{ color: "#8A8A85" }}
+                          onClick={() => setShowBudgetInput(true)}
+                          className="w-full rounded-lg p-4 mb-4 flex items-center justify-between"
+                          style={{ background: "#0D0D0D", border: "1px dashed #3A3A35" }}
                         >
-                          <Trash2 size={15} />
+                          <span className="text-sm" style={{ color: "#8A8A85" }}>
+                            Want to set a budget for today?
+                          </span>
+                          <span className="text-xs" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
+                            Set budget
+                          </span>
                         </button>
+                      )
+                    ) : (
+                      <div
+                        className="rounded-lg p-4 mb-4"
+                        style={{
+                          background: "#0D0D0D",
+                          border: `1px solid ${budgetRemaining < 0 ? "#E5484D" : "#242422"}`,
+                        }}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs" style={{ color: "#8A8A85" }}>
+                            Today's budget: {currencySymbol}
+                            {todayBudget.toFixed(2)}
+                          </span>
+                          <button onClick={clearTodayBudget} style={{ color: "#8A8A85", textDecoration: "underline", fontSize: "12px" }}>
+                            Clear
+                          </button>
+                        </div>
+                        <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
+                          {budgetRemaining < 0 ? "Over budget by" : "Left to spend today"}
+                        </div>
+                        <div
+                          className="mono text-2xl"
+                          style={{ color: budgetRemaining < 0 ? "#E5484D" : ACCENT_GREEN, fontWeight: 700 }}
+                        >
+                          {currencySymbol}
+                          {Math.abs(budgetRemaining).toFixed(2)}
+                        </div>
+                        <div
+                          className="rounded-full mt-3"
+                          style={{ height: "6px", background: "#1C1C19", overflow: "hidden" }}
+                        >
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${Math.min(100, (todayExpense / todayBudget) * 100)}%`,
+                              background: budgetRemaining < 0 ? "#E5484D" : ACCENT_GREEN,
+                              transition: "width 0.3s ease",
+                            }}
+                          />
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    )}
+
+                    <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                      <div className="flex gap-2 mb-3">
+                        <div
+                          className="flex items-center rounded-lg px-3"
+                          style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
+                        >
+                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "14px" }}>
+                            {currencySymbol}
+                          </span>
+                          <input
+                            value={expenseAmount}
+                            onChange={(e) => setExpenseAmount(e.target.value)}
+                            type="number"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            className="w-full bg-transparent py-2.5 text-sm"
+                            style={{ color: "#EDEDEA", outline: "none" }}
+                          />
+                        </div>
+                        <input
+                          value={expenseDescription}
+                          onChange={(e) => setExpenseDescription(e.target.value)}
+                          placeholder="What was it for?"
+                          className="flex-1 rounded-lg px-3 py-2.5 text-sm min-w-0"
+                          style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {EXPENSE_CATEGORIES.map((cat) => {
+                          const active = expenseCategory === cat;
+                          return (
+                            <button
+                              key={cat}
+                              onClick={() => setExpenseCategory(cat)}
+                              className="rounded-full px-3 py-1 text-xs"
+                              style={{
+                                background: active ? "#E5484D" : "#151513",
+                                border: `1px solid ${active ? "#E5484D" : "#262622"}`,
+                                color: active ? "#000000" : "#8A8A85",
+                                fontWeight: active ? 700 : 500,
+                              }}
+                            >
+                              {cat}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button
+                        onClick={addExpense}
+                        disabled={!expenseAmount || parseFloat(expenseAmount) <= 0}
+                        className="w-full rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm"
+                        style={{
+                          background: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#1C1C19" : "#E5484D",
+                          color: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#4A4A47" : "#000000",
+                          fontWeight: 700,
+                        }}
+                      >
+                        <Plus size={15} strokeWidth={2.5} />
+                        Add expense
+                      </button>
+                    </div>
+
+                    {sortedExpenses.length === 0 ? (
+                      <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                        No expenses logged yet.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {sortedExpenses.map((e) => (
+                          <div
+                            key={e.id}
+                            className="rounded-lg p-3 flex items-center gap-3"
+                            style={{ background: "#141412", border: "1px solid #242422" }}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                                  {currencySymbol}
+                                  {e.amount.toFixed(2)}
+                                </span>
+                                <span
+                                  className="text-xs rounded-full px-2 py-0.5"
+                                  style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+                                >
+                                  {e.category}
+                                </span>
+                              </div>
+                              {e.description && (
+                                <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
+                                  {e.description}
+                                </div>
+                              )}
+                              <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
+                                {e.date === today
+                                  ? "Today"
+                                  : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                                {e.time &&
+                                  ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => deleteExpense(e.id)}
+                              aria-label="Delete expense"
+                              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+                              style={{ color: "#8A8A85" }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                      <div className="flex gap-2 mb-3">
+                        <div
+                          className="flex items-center rounded-lg px-3"
+                          style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
+                        >
+                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "14px" }}>
+                            {currencySymbol}
+                          </span>
+                          <input
+                            value={incomeAmount}
+                            onChange={(e) => setIncomeAmount(e.target.value)}
+                            type="number"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            className="w-full bg-transparent py-2.5 text-sm"
+                            style={{ color: "#EDEDEA", outline: "none" }}
+                          />
+                        </div>
+                        <input
+                          value={incomeDescription}
+                          onChange={(e) => setIncomeDescription(e.target.value)}
+                          placeholder="Where was it from?"
+                          className="flex-1 rounded-lg px-3 py-2.5 text-sm min-w-0"
+                          style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {INCOME_CATEGORIES.map((cat) => {
+                          const active = incomeCategory === cat;
+                          return (
+                            <button
+                              key={cat}
+                              onClick={() => setIncomeCategory(cat)}
+                              className="rounded-full px-3 py-1 text-xs"
+                              style={{
+                                background: active ? ACCENT_GREEN : "#151513",
+                                border: `1px solid ${active ? ACCENT_GREEN : "#262622"}`,
+                                color: active ? "#000000" : "#8A8A85",
+                                fontWeight: active ? 700 : 500,
+                              }}
+                            >
+                              {cat}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button
+                        onClick={addIncome}
+                        disabled={!incomeAmount || parseFloat(incomeAmount) <= 0}
+                        className="w-full rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm"
+                        style={{
+                          background: !incomeAmount || parseFloat(incomeAmount) <= 0 ? "#1C1C19" : ACCENT_GREEN,
+                          color: !incomeAmount || parseFloat(incomeAmount) <= 0 ? "#4A4A47" : "#000000",
+                          fontWeight: 700,
+                        }}
+                      >
+                        <Plus size={15} strokeWidth={2.5} />
+                        Add income
+                      </button>
+                    </div>
+
+                    {sortedIncomes.length === 0 ? (
+                      <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                        No income logged yet.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {sortedIncomes.map((e) => (
+                          <div
+                            key={e.id}
+                            className="rounded-lg p-3 flex items-center gap-3"
+                            style={{ background: "#141412", border: "1px solid #242422" }}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                                  {currencySymbol}
+                                  {e.amount.toFixed(2)}
+                                </span>
+                                <span
+                                  className="text-xs rounded-full px-2 py-0.5"
+                                  style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+                                >
+                                  {e.category}
+                                </span>
+                              </div>
+                              {e.description && (
+                                <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
+                                  {e.description}
+                                </div>
+                              )}
+                              <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
+                                {e.date === today
+                                  ? "Today"
+                                  : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
+                                {e.time &&
+                                  ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => deleteIncome(e.id)}
+                              aria-label="Delete income"
+                              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+                              style={{ color: "#8A8A85" }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );
