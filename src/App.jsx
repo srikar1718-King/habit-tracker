@@ -56,6 +56,14 @@ import {
   Archive,
   Info,
   Calculator,
+  Car,
+  Receipt,
+  ShoppingBag,
+  Briefcase,
+  Laptop,
+  Gift,
+  ArrowUpRight,
+  ArrowDownRight,
 } from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
@@ -259,6 +267,25 @@ const INCOME_CATEGORIES = [
   "Salary", "Freelance", "Business", "Investment", "Gift", "Other",
 ];
 
+// Icons for the money calculator's category chips + transaction list badges.
+const EXPENSE_CATEGORY_ICONS = {
+  Food: Utensils,
+  Transport: Car,
+  Bills: Receipt,
+  Shopping: ShoppingBag,
+  Health: Heart,
+  Entertainment: Gamepad2,
+  Other: Sparkles,
+};
+const INCOME_CATEGORY_ICONS = {
+  Salary: Briefcase,
+  Freelance: Laptop,
+  Business: Wallet,
+  Investment: TrendingUp,
+  Gift: Gift,
+  Other: Sparkles,
+};
+
 const COLORS = [
   "#5FCB6C", "#F2C94C", "#EE6C4D", "#E5484D", "#4EA8DE",
   "#9B5DE5", "#F15BB5", "#00BBF9", "#43AA8B", "#F3722C",
@@ -389,13 +416,17 @@ function habitCategory(habit) {
 
 // Percentage math needs a stricter check than list visibility: a "specific
 // days" habit (e.g. gym on Mon/Tue) still shows in the list every day so it
-// can be logged off-schedule, but it should only pull weight in that day's
-// completion percentage on the days it's actually scheduled for — its
-// done/not-done state on any other day shouldn't move the number at all.
-function countsTowardPercentOn(habit, dateStr) {
+// can be logged off-schedule. On its scheduled days it always pulls weight,
+// done or not. On any other day it normally shouldn't move the number at
+// all — but if the user goes ahead and does it anyway on an off-schedule
+// day, that extra effort should count in its favor: it pulls weight in
+// (and immediately counts as done) only when actually completed there,
+// never as a missed day it wasn't asked to show up for.
+function countsTowardPercentOn(habit, dateStr, val) {
   if (habit.completed && habit.completedDate && dateStr > habit.completedDate) return false;
   if (!habitExistsOn(habit, dateStr)) return false;
-  return isScheduledOn(habit, dateStr);
+  if (isScheduledOn(habit, dateStr)) return true;
+  return !!val;
 }
 
 // How much a habit's completion pulls on a day's overall percentage —
@@ -542,6 +573,44 @@ function getCurrentWeekDates(today) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
     days.push(d);
+  }
+  return days;
+}
+
+// A longer, horizontally-scrollable stretch of days for the "this week"
+// strip: starts at the Monday of the earliest week we have any signal for
+// (first habit created, or first record on file), and runs through the
+// Sunday of the current week — so the current week always sits fully
+// visible at the trailing edge while scrolling left reveals past weeks.
+function getScrollableDayRange(today, habits, records) {
+  const todayDate = parseDate(today);
+  const isoDow = (todayDate.getDay() + 6) % 7;
+  const weekEnd = new Date(todayDate);
+  weekEnd.setDate(todayDate.getDate() + (6 - isoDow));
+
+  const candidateDates = [];
+  habits.forEach((h) => {
+    if (h.createdAt) candidateDates.push(fmt(new Date(h.createdAt)));
+  });
+  Object.keys(records).forEach((ds) => candidateDates.push(ds));
+
+  let startDate;
+  if (candidateDates.length > 0) {
+    const earliest = candidateDates.reduce((min, ds) => (ds < min ? ds : min), candidateDates[0]);
+    startDate = parseDate(earliest);
+  } else {
+    // No history yet — still show a few past weeks so there's somewhere to scroll.
+    startDate = new Date(todayDate);
+    startDate.setDate(todayDate.getDate() - 27);
+  }
+  const startIsoDow = (startDate.getDay() + 6) % 7;
+  startDate.setDate(startDate.getDate() - startIsoDow);
+
+  const days = [];
+  const cursor = new Date(startDate);
+  while (cursor <= weekEnd) {
+    days.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
   }
   return days;
 }
@@ -694,6 +763,32 @@ function getYesterday(todayStr) {
   const d = parseDate(todayStr);
   d.setDate(d.getDate() - 1);
   return fmt(d);
+}
+
+// Splits an already time-sorted (newest first) list of money entries into
+// day buckets, each carrying a label ("Today" / "Yesterday" / short date)
+// and that day's running total — used to draw a separator between days in
+// the expense/income lists instead of one unbroken feed.
+function groupMoneyEntriesByDate(sortedEntries, todayStr) {
+  const yesterday = getYesterday(todayStr);
+  const groups = [];
+  let currentDate = null;
+  let currentGroup = null;
+  sortedEntries.forEach((entry) => {
+    if (entry.date !== currentDate) {
+      currentDate = entry.date;
+      const d = parseDate(entry.date);
+      let label;
+      if (entry.date === todayStr) label = "Today";
+      else if (entry.date === yesterday) label = "Yesterday";
+      else label = d.toLocaleDateString("default", { weekday: "short", month: "short", day: "numeric" });
+      currentGroup = { date: entry.date, label, entries: [], total: 0 };
+      groups.push(currentGroup);
+    }
+    currentGroup.entries.push(entry);
+    currentGroup.total += entry.amount;
+  });
+  return groups;
 }
 
 function StarDisplay({ value, color = YELLOW, mutedColor = "#4A4A47" }) {
@@ -913,7 +1008,7 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
         if (categoryFilter && categoryFilter !== "All" && habitCategory(hb) !== categoryFilter) return;
-        if (!countsTowardPercentOn(hb, ds)) return;
+        if (!countsTowardPercentOn(hb, ds, val)) return;
         const w = habitWeight(hb);
         total += w;
         if (val) done += w;
@@ -936,13 +1031,42 @@ function buildTrendSeries(habits, records, today, milestoneTargets, milestoneCom
   return series;
 }
 
-// Continuous, horizontally-scrollable line + area graph of daily completion
-// percentage. Renders wide enough to fit one point per day and defaults its
-// scroll position to today (the right edge) — scrolling left reveals earlier
-// history, all the way back to the first tracked day.
-function TrendGraph({ series, todayDate }) {
+// Aggregates a daily {date, pct} series into one point per ISO week (Monday
+// start): each week's pct is the average of that week's tracked days (days
+// with no data are skipped, not counted as 0). `date` on each returned point
+// is the Monday that starts that week, so it stays compatible with the same
+// {date, pct} shape TrendGraph already expects.
+function buildWeeklyTrendSeries(dailySeries) {
+  const weeks = new Map();
+  dailySeries.forEach((pt) => {
+    const d = parseDate(pt.date);
+    const isoDow = (d.getDay() + 6) % 7;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - isoDow);
+    const weekKey = fmt(monday);
+    if (!weeks.has(weekKey)) weeks.set(weekKey, { sum: 0, count: 0 });
+    if (pt.pct !== null) {
+      const w = weeks.get(weekKey);
+      w.sum += pt.pct;
+      w.count += 1;
+    }
+  });
+  return Array.from(weeks.keys())
+    .sort()
+    .map((weekKey) => {
+      const w = weeks.get(weekKey);
+      return { date: weekKey, pct: w.count === 0 ? null : Math.round(w.sum / w.count) };
+    });
+}
+
+// Continuous, horizontally-scrollable line + area graph of completion
+// percentage. Renders wide enough to fit one point per day (or per week, in
+// "weekly" mode) and defaults its scroll position to today (the right edge)
+// — scrolling left reveals earlier history, all the way back to the first
+// tracked day/week.
+function TrendGraph({ series, todayDate, mode = "daily" }) {
   const scrollRef = useRef(null);
-  const pxPerDay = 14;
+  const pxPerDay = mode === "weekly" ? 30 : 14;
   const height = 160;
   const width = Math.max(series.length * pxPerDay, 320);
 
@@ -950,7 +1074,7 @@ function TrendGraph({ series, todayDate }) {
     if (scrollRef.current) {
       scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
     }
-  }, [series.length]);
+  }, [series.length, mode]);
 
   const points = series.map((pt, i) => {
     const x = i * pxPerDay + pxPerDay / 2;
@@ -965,8 +1089,22 @@ function TrendGraph({ series, todayDate }) {
       ? `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`
       : "";
 
-  // Sparse date labels so they don't collide — roughly weekly.
-  const labelEvery = 7;
+  // Sparse date labels so they don't collide — roughly weekly in daily mode,
+  // roughly monthly in weekly mode (since each point already spans a week).
+  const labelEvery = mode === "weekly" ? 4 : 7;
+
+  // In weekly mode a point's `date` is the Monday that starts the week, so
+  // "current" means today falls anywhere inside that 7-day span rather than
+  // an exact date match.
+  function isCurrentPeriod(pt) {
+    if (mode === "weekly") {
+      const start = parseDate(pt.date);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      return todayDate >= start && todayDate <= end;
+    }
+    return pt.date === fmt(todayDate);
+  }
 
   return (
     <div ref={scrollRef} className="hide-scrollbar" style={{ overflowX: "auto", width: "100%" }}>
@@ -985,8 +1123,8 @@ function TrendGraph({ series, todayDate }) {
         {linePath && <path d={linePath} fill="none" stroke={ACCENT_GREEN} strokeWidth={2} />}
         {points.map((pt, i) => {
           if (pt.pt.pct === null) return null;
-          const isToday = pt.pt.date === fmt(todayDate);
-          return <circle key={i} cx={pt.x} cy={pt.y} r={isToday ? 3.5 : 2} fill={isToday ? YELLOW : ACCENT_GREEN} />;
+          const isCurrent = isCurrentPeriod(pt.pt);
+          return <circle key={i} cx={pt.x} cy={pt.y} r={isCurrent ? 3.5 : 2} fill={isCurrent ? YELLOW : ACCENT_GREEN} />;
         })}
         {series.map((pt, i) => {
           if (i % labelEvery !== 0 && i !== series.length - 1) return null;
@@ -1024,6 +1162,82 @@ function buildFullMonthGrid(monthCursor) {
     cells.push(d);
   }
   return cells;
+}
+
+// A single transaction line in the money calculator's list — a colored
+// left edge + icon badge signal expense vs. income at a glance, shared by
+// both the expense and income tabs so the two lists stay visually consistent.
+function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, deleteLabel }) {
+  return (
+    <div
+      className="money-row rounded-xl flex items-center gap-3 p-3"
+      style={{
+        background: "#111110",
+        border: "1px solid #242422",
+        borderLeft: `3px solid ${accentColor}`,
+      }}
+    >
+      <div
+        className="shrink-0 flex items-center justify-center rounded-full"
+        style={{ width: "34px", height: "34px", background: hexToRgba(accentColor, 0.14), color: accentColor }}
+      >
+        <Icon size={15} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="mono text-sm shrink-0" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+            {currencySymbol}
+            {entry.amount.toFixed(2)}
+          </span>
+          {entry.description && (
+            <span className="text-xs truncate min-w-0 flex-1" style={{ color: "#8A8A85" }}>
+              {entry.description}
+            </span>
+          )}
+        </div>
+        <div className="mt-1">
+          <span
+            className="inline-block text-xs rounded-full px-2 py-0.5"
+            style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+          >
+            {entry.category}
+          </span>
+        </div>
+        {entry.time && (
+          <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
+            {new Date(entry.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={onDelete}
+        aria-label={deleteLabel}
+        className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+        style={{ color: "#8A8A85" }}
+      >
+        <Trash2 size={15} />
+      </button>
+    </div>
+  );
+}
+
+// A slim divider between days in the expense/income lists — a label
+// ("Today" / "Yesterday" / short date), a hairline rule, and that day's
+// running total, so browsing the list makes it obvious where one day's
+// transactions end and the next begin.
+function MoneyDayHeader({ label, total, currencySymbol, accentColor, isFirst }) {
+  return (
+    <div className="flex items-center gap-2" style={{ marginTop: isFirst ? 0 : "16px", marginBottom: "8px" }}>
+      <span className="text-xs mono" style={{ color: "#8A8A85", fontWeight: 700, letterSpacing: "0.05em" }}>
+        {label.toUpperCase()}
+      </span>
+      <div style={{ flex: 1, height: "1px", background: "#1C1C19" }} />
+      <span className="mono text-xs" style={{ color: accentColor, fontWeight: 700 }}>
+        {currencySymbol}
+        {total.toFixed(2)}
+      </span>
+    </div>
+  );
 }
 
 export default function HabitTracker() {
@@ -1133,6 +1347,7 @@ export default function HabitTracker() {
 
   const [milestoneToast, setMilestoneToast] = useState(null); // { id, title, body } | null
   const [showTrendGraph, setShowTrendGraph] = useState(false);
+  const [trendGraphView, setTrendGraphView] = useState("daily"); // "daily" | "weekly"
   const [completeHabitConfirm, setCompleteHabitConfirm] = useState(null); // habit pending "mark completed" confirmation
 
   const pressRef = useRef({ timer: null, longPressed: false });
@@ -1140,6 +1355,8 @@ export default function HabitTracker() {
   const googleButtonRef = useRef(null);
   const backupFileInputRef = useRef(null);
   const allowExitRef = useRef(false);
+  const daysStripRef = useRef(null);
+  const todayDayCellRef = useRef(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
   function getAudioContext() {
@@ -1161,6 +1378,15 @@ export default function HabitTracker() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Default the "this week" strip's scroll position to today, so opening the
+  // app lands on the current day instead of the far-left (earliest) end of
+  // its scrollable history.
+  useEffect(() => {
+    if (!loading && todayDayCellRef.current) {
+      todayDayCellRef.current.scrollIntoView({ behavior: "auto", inline: "center", block: "nearest" });
+    }
+  }, [loading]);
 
   // Back-button handling: pressing back closes whatever's open on top
   // (a modal, the detail view, the Archive tab...) instead of leaving the
@@ -2472,7 +2698,7 @@ export default function HabitTracker() {
         const hb = habits.find((h) => String(h.id) === String(hid));
         if (!hb) return;
         if (selectedCategory !== "All" && habitCategory(hb) !== selectedCategory) return;
-        if (!countsTowardPercentOn(hb, dateStr)) return;
+        if (!countsTowardPercentOn(hb, dateStr, val)) return;
         const w = habitWeight(hb);
         total += w;
         if (val) done += w;
@@ -2685,6 +2911,24 @@ export default function HabitTracker() {
         .star-btn { transition: transform 0.12s ease; background: transparent; border: none; padding: 2px; cursor: pointer; }
         .star-btn:hover { transform: scale(1.15); }
         .period-btn { transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
+        @keyframes moneySheen {
+          0% { transform: translateX(-120%) rotate(8deg); opacity: 0; }
+          15% { opacity: 0.55; }
+          60% { opacity: 0.12; }
+          100% { transform: translateX(240%) rotate(8deg); opacity: 0; }
+        }
+        .money-sheen {
+          position: absolute;
+          top: -50%;
+          left: 0;
+          width: 34%;
+          height: 200%;
+          background: linear-gradient(100deg, transparent, rgba(255,255,255,0.16), transparent);
+          animation: moneySheen 1.7s ease-out forwards;
+          pointer-events: none;
+        }
+        .money-row { transition: transform 0.12s ease, border-color 0.15s ease; }
+        .money-row:active { transform: scale(0.99); }
         .fab { transition: transform 0.15s ease, box-shadow 0.2s ease; }
         .fab:active { transform: scale(0.92); }
         .add-page { animation: fadeIn 0.15s ease-out; }
@@ -2952,6 +3196,7 @@ export default function HabitTracker() {
         <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
           <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
           THIS WEEK
+          <span style={{ color: "#4A4A46", fontWeight: 500 }}>· swipe for past days</span>
         </div>
         <div
           className="rounded-lg mb-8"
@@ -2962,8 +3207,18 @@ export default function HabitTracker() {
             border: "1px solid #1C1C19",
           }}
         >
-        <div className="grid grid-cols-7 gap-1">
-          {getCurrentWeekDates(today).map((d) => {
+        <div
+          ref={daysStripRef}
+          className="hide-scrollbar"
+          style={{
+            display: "flex",
+            gap: "10px",
+            overflowX: "auto",
+            scrollSnapType: "x proximity",
+            paddingBottom: "2px",
+          }}
+        >
+          {getScrollableDayRange(today, habits, records).map((d) => {
             const ds = fmt(d);
             const isToday = ds === today;
             const isFuture = ds > today;
@@ -2972,10 +3227,17 @@ export default function HabitTracker() {
             return (
               <button
                 key={ds}
+                ref={isToday ? todayDayCellRef : null}
                 onClick={() => !isFuture && setSelectedDate(ds)}
                 disabled={isFuture}
                 className="flex flex-col items-center gap-1.5"
-                style={{ opacity: isFuture ? 0.4 : 1, cursor: isFuture ? "default" : "pointer" }}
+                style={{
+                  flex: "0 0 auto",
+                  width: "40px",
+                  opacity: isFuture ? 0.4 : 1,
+                  cursor: isFuture ? "default" : "pointer",
+                  scrollSnapAlign: "center",
+                }}
               >
                 <span
                   className="text-xs"
@@ -3033,7 +3295,7 @@ export default function HabitTracker() {
               </span>
               <button
                 onClick={() => setShowTrendGraph(true)}
-                aria-label="View daily completion trend graph"
+                aria-label="View daily and weekly completion trend graph"
                 className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
                 style={{ background: "transparent", border: "1px solid #262622", color: "#8A8A85" }}
               >
@@ -3572,20 +3834,40 @@ export default function HabitTracker() {
                     <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
                     CALCULATOR
                   </div>
-                  <div className="rounded-lg p-6 text-center" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                    <div className="text-sm mb-1" style={{ color: "#EDEDEA", fontWeight: 600 }}>
+                  <div
+                    className="rounded-2xl p-7 text-center relative overflow-hidden"
+                    style={{
+                      background: "linear-gradient(160deg, #14140F 0%, #0A0A08 70%)",
+                      border: "1px solid #262622",
+                      boxShadow: `inset 0 1px 0 0 ${hexToRgba(YELLOW, 0.35)}, 0 20px 40px -28px rgba(0,0,0,0.9)`,
+                    }}
+                  >
+                    <div className="money-sheen" />
+                    <div
+                      className="mx-auto mb-4 flex items-center justify-center"
+                      style={{
+                        width: "52px",
+                        height: "52px",
+                        borderRadius: "16px",
+                        background: hexToRgba(YELLOW, 0.12),
+                        border: `1px solid ${hexToRgba(YELLOW, 0.35)}`,
+                      }}
+                    >
+                      <Wallet size={22} color={YELLOW} />
+                    </div>
+                    <div className="text-base mb-1.5" style={{ color: "#EDEDEA", fontWeight: 700 }}>
                       Which currency do you want to track?
                     </div>
-                    <div className="text-xs mb-5" style={{ color: "#8A8A85" }}>
+                    <div className="text-xs mb-6" style={{ color: "#8A8A85" }}>
                       You can change this anytime.
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-3">
                       <button
                         onClick={() => persistCurrency("USD")}
-                        className="flex-1 rounded-lg py-4 flex flex-col items-center gap-1"
+                        className="flex-1 rounded-xl py-5 flex flex-col items-center gap-1.5"
                         style={{ background: "#151513", border: "1px solid #262622" }}
                       >
-                        <span className="mono text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                        <span className="mono text-3xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
                           $
                         </span>
                         <span className="text-xs" style={{ color: "#8A8A85" }}>
@@ -3594,10 +3876,10 @@ export default function HabitTracker() {
                       </button>
                       <button
                         onClick={() => persistCurrency("INR")}
-                        className="flex-1 rounded-lg py-4 flex flex-col items-center gap-1"
+                        className="flex-1 rounded-xl py-5 flex flex-col items-center gap-1.5"
                         style={{ background: "#151513", border: "1px solid #262622" }}
                       >
-                        <span className="mono text-2xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                        <span className="mono text-3xl" style={{ color: "#EDEDEA", fontWeight: 700 }}>
                           ₹
                         </span>
                         <span className="text-xs" style={{ color: "#8A8A85" }}>
@@ -3623,6 +3905,9 @@ export default function HabitTracker() {
             const todayExpense = expenses.filter((e) => e.date === today).reduce((sum, e) => sum + e.amount, 0);
             const todayBudget = dailyBudgets[today];
             const budgetRemaining = todayBudget !== undefined ? todayBudget - todayExpense : null;
+            const totalFlow = totalIncome + totalExpense;
+            const incomeShare = totalFlow > 0 ? (totalIncome / totalFlow) * 100 : 0;
+            const expenseShare = totalFlow > 0 ? 100 - incomeShare : 0;
 
             return (
               <div>
@@ -3631,92 +3916,156 @@ export default function HabitTracker() {
                     <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
                     CALCULATOR
                   </span>
-                  <button onClick={() => setCurrency(null)} style={{ color: "#8A8A85", textDecoration: "underline" }}>
-                    {currency} ({currencySymbol}) · Change
+                  <button
+                    onClick={() => setCurrency(null)}
+                    className="flex items-center gap-1.5 rounded-full pl-2 pr-2.5 py-1"
+                    style={{ background: "#141412", border: "1px solid #242422", color: "#9A9A94" }}
+                  >
+                    <span className="mono" style={{ color: "#EDEDEA", fontWeight: 700 }}>
+                      {currencySymbol}
+                    </span>
+                    {currency} · Change
                   </button>
                 </div>
 
+                {/* Balance hero — a ledger scale showing income vs. expense, not just a number */}
                 <div
-                  className="rounded-lg p-5 mb-4"
+                  className="rounded-2xl p-5 mb-5 relative overflow-hidden"
                   style={{
-                    backgroundColor: "#0D0D0D",
-                    backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
+                    background: "linear-gradient(160deg, #14140F 0%, #0A0A08 65%)",
                     border: "1px solid #242422",
+                    boxShadow: `inset 0 1px 0 0 ${hexToRgba(netBalance >= 0 ? ACCENT_GREEN : "#E5484D", 0.5)}, 0 20px 44px -30px rgba(0,0,0,0.9)`,
                   }}
                 >
-                  <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
-                    Balance
+                  <div className="money-sheen" />
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      top: "-60px",
+                      right: "-40px",
+                      width: "160px",
+                      height: "160px",
+                      borderRadius: "999px",
+                      background: hexToRgba(netBalance >= 0 ? ACCENT_GREEN : "#E5484D", 0.14),
+                      filter: "blur(30px)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <div className="flex items-center justify-between mb-1.5" style={{ position: "relative" }}>
+                    <span className="text-xs mono" style={{ color: "#8A8A85", letterSpacing: "0.06em" }}>
+                      NET BALANCE
+                    </span>
+                    <span
+                      className="text-xs rounded-full px-2 py-0.5 mono"
+                      style={{
+                        background: hexToRgba(monthNet >= 0 ? ACCENT_GREEN : "#E5484D", 0.14),
+                        color: monthNet >= 0 ? ACCENT_GREEN : "#E5484D",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {monthNet < 0 ? "-" : "+"}
+                      {currencySymbol}
+                      {Math.abs(monthNet).toFixed(2)} this month
+                    </span>
                   </div>
-                  <div className="mono text-3xl" style={{ color: netBalance >= 0 ? ACCENT_GREEN : "#E5484D", fontWeight: 700 }}>
+                  <div
+                    className="mono"
+                    style={{
+                      position: "relative",
+                      color: netBalance >= 0 ? "#EDEDEA" : "#E5484D",
+                      fontWeight: 700,
+                      fontSize: "38px",
+                      lineHeight: 1.15,
+                      letterSpacing: "-0.01em",
+                    }}
+                  >
                     {netBalance < 0 ? "-" : ""}
                     {currencySymbol}
                     {Math.abs(netBalance).toFixed(2)}
                   </div>
-                  <div className="flex gap-4 mt-3">
-                    <div>
-                      <div className="text-xs" style={{ color: "#8A8A85" }}>
-                        Income
-                      </div>
-                      <div className="mono text-sm" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
-                        {currencySymbol}
-                        {totalIncome.toFixed(2)}
-                      </div>
+
+                  <div style={{ position: "relative", marginTop: "18px" }}>
+                    <div style={{ display: "flex", height: "10px", borderRadius: "999px", overflow: "hidden", background: "#161614" }}>
+                      <div style={{ width: `${incomeShare}%`, background: ACCENT_GREEN, transition: "width 0.4s ease" }} />
+                      <div style={{ width: `${expenseShare}%`, background: "#E5484D", transition: "width 0.4s ease" }} />
                     </div>
-                    <div>
-                      <div className="text-xs" style={{ color: "#8A8A85" }}>
-                        Expense
+                    <div className="flex items-center justify-between mt-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <ArrowUpRight size={12} color={ACCENT_GREEN} />
+                        <span className="text-xs" style={{ color: "#8A8A85" }}>
+                          Income
+                        </span>
+                        <span className="mono text-xs" style={{ color: ACCENT_GREEN, fontWeight: 700 }}>
+                          {currencySymbol}
+                          {totalIncome.toFixed(2)}
+                        </span>
                       </div>
-                      <div className="mono text-sm" style={{ color: "#E5484D", fontWeight: 600 }}>
-                        {currencySymbol}
-                        {totalExpense.toFixed(2)}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs" style={{ color: "#8A8A85" }}>
-                        This month
-                      </div>
-                      <div className="mono text-sm" style={{ color: monthNet >= 0 ? ACCENT_GREEN : "#E5484D", fontWeight: 600 }}>
-                        {monthNet < 0 ? "-" : ""}
-                        {currencySymbol}
-                        {Math.abs(monthNet).toFixed(2)}
+                      <div className="flex items-center gap-1.5">
+                        <span className="mono text-xs" style={{ color: "#E5484D", fontWeight: 700 }}>
+                          {currencySymbol}
+                          {totalExpense.toFixed(2)}
+                        </span>
+                        <span className="text-xs" style={{ color: "#8A8A85" }}>
+                          Expense
+                        </span>
+                        <ArrowDownRight size={12} color="#E5484D" />
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex gap-2 mb-4">
-                  <button
-                    onClick={() => setCalculatorTab("expense")}
-                    className="flex-1 rounded-lg py-2.5 text-sm"
+                {/* Expense / Income segmented control */}
+                <div
+                  className="relative rounded-full mb-5"
+                  style={{ background: "#0D0D0D", border: "1px solid #242422", height: "44px" }}
+                >
+                  <div
+                    aria-hidden="true"
                     style={{
-                      background: calculatorTab === "expense" ? "#E5484D" : "#0D0D0D",
-                      border: `1px solid ${calculatorTab === "expense" ? "#E5484D" : "#242422"}`,
-                      color: calculatorTab === "expense" ? "#000000" : "#8A8A85",
-                      fontWeight: calculatorTab === "expense" ? 700 : 500,
+                      position: "absolute",
+                      top: "4px",
+                      bottom: "4px",
+                      left: calculatorTab === "expense" ? "4px" : "calc(50% + 2px)",
+                      right: calculatorTab === "expense" ? "calc(50% + 2px)" : "4px",
+                      borderRadius: "999px",
+                      background: calculatorTab === "expense" ? "#E5484D" : ACCENT_GREEN,
+                      transition: "left 0.25s ease, right 0.25s ease, background 0.25s ease",
                     }}
-                  >
-                    Expense
-                  </button>
-                  <button
-                    onClick={() => setCalculatorTab("income")}
-                    className="flex-1 rounded-lg py-2.5 text-sm"
-                    style={{
-                      background: calculatorTab === "income" ? ACCENT_GREEN : "#0D0D0D",
-                      border: `1px solid ${calculatorTab === "income" ? ACCENT_GREEN : "#242422"}`,
-                      color: calculatorTab === "income" ? "#000000" : "#8A8A85",
-                      fontWeight: calculatorTab === "income" ? 700 : 500,
-                    }}
-                  >
-                    Income
-                  </button>
+                  />
+                  <div className="relative flex" style={{ height: "100%" }}>
+                    <button
+                      onClick={() => setCalculatorTab("expense")}
+                      className="flex-1 rounded-full text-sm flex items-center justify-center gap-1.5"
+                      style={{
+                        color: calculatorTab === "expense" ? "#000000" : "#8A8A85",
+                        fontWeight: calculatorTab === "expense" ? 700 : 500,
+                      }}
+                    >
+                      <ArrowDownRight size={14} />
+                      Expense
+                    </button>
+                    <button
+                      onClick={() => setCalculatorTab("income")}
+                      className="flex-1 rounded-full text-sm flex items-center justify-center gap-1.5"
+                      style={{
+                        color: calculatorTab === "income" ? "#000000" : "#8A8A85",
+                        fontWeight: calculatorTab === "income" ? 700 : 500,
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Income
+                    </button>
+                  </div>
                 </div>
 
                 {calculatorTab === "expense" ? (
                   <>
                     {todayBudget === undefined ? (
                       showBudgetInput ? (
-                        <div className="rounded-lg p-4 mb-4" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
-                          <div className="text-xs mb-2" style={{ color: "#8A8A85" }}>
+                        <div className="rounded-xl p-4 mb-4" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                          <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
+                            <Wallet size={13} />
                             What's your budget for today?
                           </div>
                           <div className="flex gap-2">
@@ -3765,53 +4114,61 @@ export default function HabitTracker() {
                       ) : (
                         <button
                           onClick={() => setShowBudgetInput(true)}
-                          className="w-full rounded-lg p-4 mb-4 flex items-center justify-between"
-                          style={{ background: "#0D0D0D", border: "1px dashed #3A3A35" }}
+                          className="w-full rounded-xl p-4 mb-4 flex items-center justify-between"
+                          style={{ background: "#0D0D0D", border: `1px dashed ${hexToRgba(YELLOW, 0.4)}` }}
                         >
-                          <span className="text-sm" style={{ color: "#8A8A85" }}>
+                          <span className="text-sm flex items-center gap-2" style={{ color: "#8A8A85" }}>
+                            <Wallet size={14} color={YELLOW} />
                             Want to set a budget for today?
                           </span>
-                          <span className="text-xs" style={{ color: ACCENT_GREEN, fontWeight: 600 }}>
+                          <span className="text-xs" style={{ color: YELLOW, fontWeight: 700 }}>
                             Set budget
                           </span>
                         </button>
                       )
                     ) : (
                       <div
-                        className="rounded-lg p-4 mb-4"
+                        className="rounded-xl p-4 mb-4"
                         style={{
                           background: "#0D0D0D",
                           border: `1px solid ${budgetRemaining < 0 ? "#E5484D" : "#242422"}`,
+                          boxShadow: `inset 0 1px 0 0 ${hexToRgba(budgetRemaining < 0 ? "#E5484D" : YELLOW, 0.35)}`,
                         }}
                       >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs" style={{ color: "#8A8A85" }}>
-                            Today's budget: {currencySymbol}
+                        <div className="flex items-center justify-between mb-2.5">
+                          <span className="text-xs flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
+                            <Wallet size={13} color={budgetRemaining < 0 ? "#E5484D" : YELLOW} />
+                            Today's budget · {currencySymbol}
                             {todayBudget.toFixed(2)}
                           </span>
                           <button onClick={clearTodayBudget} style={{ color: "#8A8A85", textDecoration: "underline", fontSize: "12px" }}>
                             Clear
                           </button>
                         </div>
-                        <div className="text-xs mb-1" style={{ color: "#8A8A85" }}>
-                          {budgetRemaining < 0 ? "Over budget by" : "Left to spend today"}
+                        <div className="flex items-end justify-between mb-2">
+                          <div>
+                            <div className="text-xs mb-0.5" style={{ color: "#8A8A85" }}>
+                              {budgetRemaining < 0 ? "Over budget by" : "Left to spend"}
+                            </div>
+                            <div
+                              className="mono text-2xl"
+                              style={{ color: budgetRemaining < 0 ? "#E5484D" : ACCENT_GREEN, fontWeight: 700 }}
+                            >
+                              {currencySymbol}
+                              {Math.abs(budgetRemaining).toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="text-xs mono" style={{ color: "#6E6E6A" }}>
+                            {currencySymbol}
+                            {todayExpense.toFixed(2)} spent
+                          </div>
                         </div>
-                        <div
-                          className="mono text-2xl"
-                          style={{ color: budgetRemaining < 0 ? "#E5484D" : ACCENT_GREEN, fontWeight: 700 }}
-                        >
-                          {currencySymbol}
-                          {Math.abs(budgetRemaining).toFixed(2)}
-                        </div>
-                        <div
-                          className="rounded-full mt-3"
-                          style={{ height: "6px", background: "#1C1C19", overflow: "hidden" }}
-                        >
+                        <div className="rounded-full" style={{ height: "8px", background: "#1C1C19", overflow: "hidden" }}>
                           <div
                             style={{
                               height: "100%",
                               width: `${Math.min(100, (todayExpense / todayBudget) * 100)}%`,
-                              background: budgetRemaining < 0 ? "#E5484D" : ACCENT_GREEN,
+                              background: budgetRemaining < 0 ? "#E5484D" : `linear-gradient(90deg, ${ACCENT_GREEN}, ${YELLOW})`,
                               transition: "width 0.3s ease",
                             }}
                           />
@@ -3819,13 +4176,16 @@ export default function HabitTracker() {
                       </div>
                     )}
 
-                    <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                    <div
+                      className="rounded-xl p-4 mb-5"
+                      style={{ background: "#0D0D0D", border: "1px solid #242422", boxShadow: `inset 0 1px 0 0 ${hexToRgba("#E5484D", 0.3)}` }}
+                    >
                       <div className="flex gap-2 mb-3">
                         <div
                           className="flex items-center rounded-lg px-3"
-                          style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
+                          style={{ background: "#151513", border: "1px solid #262622", width: "112px" }}
                         >
-                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "14px" }}>
+                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "15px" }}>
                             {currencySymbol}
                           </span>
                           <input
@@ -3834,8 +4194,8 @@ export default function HabitTracker() {
                             type="number"
                             inputMode="decimal"
                             placeholder="0.00"
-                            className="w-full bg-transparent py-2.5 text-sm"
-                            style={{ color: "#EDEDEA", outline: "none" }}
+                            className="mono w-full bg-transparent py-2.5 text-sm"
+                            style={{ color: "#EDEDEA", outline: "none", fontWeight: 700 }}
                           />
                         </div>
                         <input
@@ -3846,21 +4206,24 @@ export default function HabitTracker() {
                           style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
                         />
                       </div>
-                      <div className="flex flex-wrap gap-1.5 mb-3">
+                      <div className="flex flex-wrap gap-1.5 mb-3.5">
                         {EXPENSE_CATEGORIES.map((cat) => {
                           const active = expenseCategory === cat;
+                          const CatIcon = EXPENSE_CATEGORY_ICONS[cat] || Sparkles;
                           return (
                             <button
                               key={cat}
                               onClick={() => setExpenseCategory(cat)}
-                              className="rounded-full px-3 py-1 text-xs"
+                              className="rounded-full pl-2.5 pr-3 py-1.5 text-xs flex items-center gap-1.5"
                               style={{
                                 background: active ? "#E5484D" : "#151513",
                                 border: `1px solid ${active ? "#E5484D" : "#262622"}`,
-                                color: active ? "#000000" : "#8A8A85",
+                                color: active ? "#000000" : "#9A9A94",
                                 fontWeight: active ? 700 : 500,
+                                boxShadow: active ? `0 0 0 3px ${hexToRgba("#E5484D", 0.18)}` : "none",
                               }}
                             >
+                              <CatIcon size={12} />
                               {cat}
                             </button>
                           );
@@ -3882,65 +4245,55 @@ export default function HabitTracker() {
                     </div>
 
                     {sortedExpenses.length === 0 ? (
-                      <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                      <div className="text-sm text-center py-10 flex flex-col items-center gap-2" style={{ color: "#6E6E6A" }}>
+                        <Receipt size={22} color="#3A3A35" />
                         No expenses logged yet.
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-2">
-                        {sortedExpenses.map((e) => (
-                          <div
-                            key={e.id}
-                            className="rounded-lg p-3 flex items-center gap-3"
-                            style={{ background: "#141412", border: "1px solid #242422" }}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
-                                  {currencySymbol}
-                                  {e.amount.toFixed(2)}
-                                </span>
-                                <span
-                                  className="text-xs rounded-full px-2 py-0.5"
-                                  style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
-                                >
-                                  {e.category}
-                                </span>
-                              </div>
-                              {e.description && (
-                                <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
-                                  {e.description}
-                                </div>
-                              )}
-                              <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
-                                {e.date === today
-                                  ? "Today"
-                                  : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
-                                {e.time &&
-                                  ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
-                              </div>
+                      <>
+                        <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                          <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: "#E5484D", display: "inline-block" }} />
+                          RECENT EXPENSES
+                        </div>
+                        {groupMoneyEntriesByDate(sortedExpenses, today).map((group, gi) => (
+                          <div key={group.date}>
+                            <MoneyDayHeader
+                              label={group.label}
+                              total={group.total}
+                              currencySymbol={currencySymbol}
+                              accentColor="#E5484D"
+                              isFirst={gi === 0}
+                            />
+                            <div className="flex flex-col gap-2">
+                              {group.entries.map((e) => (
+                                <MoneyEntryRow
+                                  key={e.id}
+                                  entry={e}
+                                  currencySymbol={currencySymbol}
+                                  Icon={EXPENSE_CATEGORY_ICONS[e.category] || Sparkles}
+                                  accentColor="#E5484D"
+                                  onDelete={() => deleteExpense(e.id)}
+                                  deleteLabel="Delete expense"
+                                />
+                              ))}
                             </div>
-                            <button
-                              onClick={() => deleteExpense(e.id)}
-                              aria-label="Delete expense"
-                              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
-                              style={{ color: "#8A8A85" }}
-                            >
-                              <Trash2 size={15} />
-                            </button>
                           </div>
                         ))}
-                      </div>
+                      </>
                     )}
                   </>
                 ) : (
                   <>
-                    <div className="rounded-lg p-4 mb-6" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                    <div
+                      className="rounded-xl p-4 mb-5"
+                      style={{ background: "#0D0D0D", border: "1px solid #242422", boxShadow: `inset 0 1px 0 0 ${hexToRgba(ACCENT_GREEN, 0.3)}` }}
+                    >
                       <div className="flex gap-2 mb-3">
                         <div
                           className="flex items-center rounded-lg px-3"
-                          style={{ background: "#151513", border: "1px solid #262622", width: "110px" }}
+                          style={{ background: "#151513", border: "1px solid #262622", width: "112px" }}
                         >
-                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "14px" }}>
+                          <span className="mono" style={{ color: "#6E6E6A", flexShrink: 0, fontSize: "15px" }}>
                             {currencySymbol}
                           </span>
                           <input
@@ -3949,8 +4302,8 @@ export default function HabitTracker() {
                             type="number"
                             inputMode="decimal"
                             placeholder="0.00"
-                            className="w-full bg-transparent py-2.5 text-sm"
-                            style={{ color: "#EDEDEA", outline: "none" }}
+                            className="mono w-full bg-transparent py-2.5 text-sm"
+                            style={{ color: "#EDEDEA", outline: "none", fontWeight: 700 }}
                           />
                         </div>
                         <input
@@ -3961,21 +4314,24 @@ export default function HabitTracker() {
                           style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
                         />
                       </div>
-                      <div className="flex flex-wrap gap-1.5 mb-3">
+                      <div className="flex flex-wrap gap-1.5 mb-3.5">
                         {INCOME_CATEGORIES.map((cat) => {
                           const active = incomeCategory === cat;
+                          const CatIcon = INCOME_CATEGORY_ICONS[cat] || Sparkles;
                           return (
                             <button
                               key={cat}
                               onClick={() => setIncomeCategory(cat)}
-                              className="rounded-full px-3 py-1 text-xs"
+                              className="rounded-full pl-2.5 pr-3 py-1.5 text-xs flex items-center gap-1.5"
                               style={{
                                 background: active ? ACCENT_GREEN : "#151513",
                                 border: `1px solid ${active ? ACCENT_GREEN : "#262622"}`,
-                                color: active ? "#000000" : "#8A8A85",
+                                color: active ? "#000000" : "#9A9A94",
                                 fontWeight: active ? 700 : 500,
+                                boxShadow: active ? `0 0 0 3px ${hexToRgba(ACCENT_GREEN, 0.18)}` : "none",
                               }}
                             >
+                              <CatIcon size={12} />
                               {cat}
                             </button>
                           );
@@ -3997,54 +4353,41 @@ export default function HabitTracker() {
                     </div>
 
                     {sortedIncomes.length === 0 ? (
-                      <div className="text-sm text-center py-10" style={{ color: "#6E6E6A" }}>
+                      <div className="text-sm text-center py-10 flex flex-col items-center gap-2" style={{ color: "#6E6E6A" }}>
+                        <Wallet size={22} color="#3A3A35" />
                         No income logged yet.
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-2">
-                        {sortedIncomes.map((e) => (
-                          <div
-                            key={e.id}
-                            className="rounded-lg p-3 flex items-center gap-3"
-                            style={{ background: "#141412", border: "1px solid #242422" }}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="mono text-sm" style={{ color: "#EDEDEA", fontWeight: 700 }}>
-                                  {currencySymbol}
-                                  {e.amount.toFixed(2)}
-                                </span>
-                                <span
-                                  className="text-xs rounded-full px-2 py-0.5"
-                                  style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
-                                >
-                                  {e.category}
-                                </span>
-                              </div>
-                              {e.description && (
-                                <div className="text-xs truncate mt-1" style={{ color: "#8A8A85" }}>
-                                  {e.description}
-                                </div>
-                              )}
-                              <div className="text-xs mt-1" style={{ color: "#6E6E6A" }}>
-                                {e.date === today
-                                  ? "Today"
-                                  : parseDate(e.date).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" })}
-                                {e.time &&
-                                  ` at ${new Date(e.time).toLocaleTimeString("default", { hour: "numeric", minute: "2-digit", hour12: true })}`}
-                              </div>
+                      <>
+                        <div className="text-xs mono tracking-wide mb-2.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                          <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: ACCENT_GREEN, display: "inline-block" }} />
+                          RECENT INCOME
+                        </div>
+                        {groupMoneyEntriesByDate(sortedIncomes, today).map((group, gi) => (
+                          <div key={group.date}>
+                            <MoneyDayHeader
+                              label={group.label}
+                              total={group.total}
+                              currencySymbol={currencySymbol}
+                              accentColor={ACCENT_GREEN}
+                              isFirst={gi === 0}
+                            />
+                            <div className="flex flex-col gap-2">
+                              {group.entries.map((e) => (
+                                <MoneyEntryRow
+                                  key={e.id}
+                                  entry={e}
+                                  currencySymbol={currencySymbol}
+                                  Icon={INCOME_CATEGORY_ICONS[e.category] || Sparkles}
+                                  accentColor={ACCENT_GREEN}
+                                  onDelete={() => deleteIncome(e.id)}
+                                  deleteLabel="Delete income"
+                                />
+                              ))}
                             </div>
-                            <button
-                              onClick={() => deleteIncome(e.id)}
-                              aria-label="Delete income"
-                              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
-                              style={{ color: "#8A8A85" }}
-                            >
-                              <Trash2 size={15} />
-                            </button>
                           </div>
                         ))}
-                      </div>
+                      </>
                     )}
                   </>
                 )}
@@ -6347,12 +6690,15 @@ export default function HabitTracker() {
         </div>
       )}
 
-      {/* Daily completion trend graph */}
+      {/* Completion trend graph (daily / weekly) */}
       {showTrendGraph &&
         (() => {
-          const series = buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions, selectedCategory);
+          const dailySeries = buildTrendSeries(habits, records, today, milestoneTargets, milestoneCompletions, selectedCategory);
+          const weeklySeries = buildWeeklyTrendSeries(dailySeries);
+          const activeSeries = trendGraphView === "weekly" ? weeklySeries : dailySeries;
           const todayDate = parseDate(today);
-          const trackedDays = series.filter((pt) => pt.pct !== null).length;
+          const trackedDays = dailySeries.filter((pt) => pt.pct !== null).length;
+          const trackedWeeks = weeklySeries.filter((pt) => pt.pct !== null).length;
           return (
             <div
               onClick={() => setShowTrendGraph(false)}
@@ -6381,23 +6727,47 @@ export default function HabitTracker() {
                   overflowY: "auto",
                 }}
               >
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <BarChart3 size={15} color={ACCENT_GREEN} />
                     <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
-                      Daily completion
+                      {trendGraphView === "weekly" ? "Weekly completion" : "Daily completion"}
                     </span>
                   </div>
                   <button onClick={() => setShowTrendGraph(false)} aria-label="Close" style={{ color: "#8A8A85" }}>
                     <X size={18} />
                   </button>
                 </div>
-                <div className="text-xs mb-4" style={{ color: "#6E6E6A" }}>
-                  {trackedDays === 0
-                    ? "No tracked days yet — this fills in as you go."
-                    : `Scroll left to see earlier days · ${trackedDays} day${trackedDays === 1 ? "" : "s"} tracked`}
+                <div className="flex gap-1 mb-4">
+                  {[
+                    { key: "daily", label: "Daily average" },
+                    { key: "weekly", label: "Weekly average" },
+                  ].map((v) => (
+                    <button
+                      key={v.key}
+                      onClick={() => setTrendGraphView(v.key)}
+                      className="period-btn rounded-full px-2.5 py-1 text-xs"
+                      style={{
+                        background: trendGraphView === v.key ? ACCENT_GREEN : "transparent",
+                        color: trendGraphView === v.key ? "#000000" : "#9A9A94",
+                        border: `1px solid ${trendGraphView === v.key ? ACCENT_GREEN : "#262622"}`,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
                 </div>
-                <TrendGraph series={series} todayDate={todayDate} />
+                <div className="text-xs mb-4" style={{ color: "#6E6E6A" }}>
+                  {trendGraphView === "weekly"
+                    ? trackedWeeks === 0
+                      ? "No tracked weeks yet — this fills in as you go."
+                      : `Scroll left to see earlier weeks · ${trackedWeeks} week${trackedWeeks === 1 ? "" : "s"} tracked`
+                    : trackedDays === 0
+                      ? "No tracked days yet — this fills in as you go."
+                      : `Scroll left to see earlier days · ${trackedDays} day${trackedDays === 1 ? "" : "s"} tracked`}
+                </div>
+                <TrendGraph series={activeSeries} todayDate={todayDate} mode={trendGraphView} />
               </div>
             </div>
           );
