@@ -64,7 +64,13 @@ import {
   Gift,
   ArrowUpRight,
   ArrowDownRight,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
+// Namespace import to get every icon lucide-react ships (well over 500), so
+// the "Other" expense category can offer icon suggestions that match
+// whatever the user types, instead of being limited to a hand-picked set.
+import * as LucideIcons from "lucide-react";
 
 const ACCENT_GREEN = "#5FCB6C";
 
@@ -285,6 +291,49 @@ const INCOME_CATEGORY_ICONS = {
   Gift: Gift,
   Other: Sparkles,
 };
+
+// A searchable index of every icon lucide-react exports (1000+, well past
+// the 500 minimum), used to suggest icons for a custom "Other" expense
+// based on whatever the user types. Built once at module load, not per
+// render — filtering/searching ~1000 plain objects on each keystroke is
+// still trivial, so no debouncing is needed.
+const ICON_EXPORT_EXCLUDE = new Set(["createLucideIcon", "icons", "Icon", "LucideIcon", "default"]);
+function isLikelyIconExport(name, value) {
+  if (ICON_EXPORT_EXCLUDE.has(name)) return false;
+  if (!/^[A-Z]/.test(name)) return false;
+  return typeof value === "function" || (typeof value === "object" && value !== null);
+}
+function iconNameToLabel(name) {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase();
+}
+const ICON_SEARCH_INDEX = Object.keys(LucideIcons)
+  .filter((name) => isLikelyIconExport(name, LucideIcons[name]))
+  .map((name) => ({ name, label: iconNameToLabel(name), Icon: LucideIcons[name] }));
+
+// Ranks icons by how well their (space-separated) name matches the query:
+// exact word > starts-with > substring, each icon capped at its best score.
+function searchIcons(query, limit = 24) {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const words = q.split(/\s+/).filter(Boolean);
+  const scored = [];
+  for (const item of ICON_SEARCH_INDEX) {
+    const labelWords = item.label.split(" ");
+    let score = 0;
+    if (item.label === q) score = 100;
+    else if (labelWords.some((w) => w === q)) score = 80;
+    else if (item.label.startsWith(q)) score = 70;
+    else if (labelWords.some((w) => w.startsWith(q))) score = 50;
+    else if (words.length > 1 && words.every((w) => item.label.includes(w))) score = 30;
+    else if (item.label.includes(q)) score = 20;
+    if (score > 0) scored.push({ name: item.name, Icon: item.Icon, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return scored.slice(0, limit);
+}
 
 const COLORS = [
   "#5FCB6C", "#F2C94C", "#EE6C4D", "#E5484D", "#4EA8DE",
@@ -1197,8 +1246,8 @@ function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, del
         </div>
         <div className="mt-1">
           <span
-            className="inline-block text-xs rounded-full px-2 py-0.5"
-            style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85" }}
+            className="inline-block truncate text-xs rounded-full px-2 py-0.5"
+            style={{ background: "#0D0D0D", border: "1px solid #242422", color: "#8A8A85", maxWidth: "180px", verticalAlign: "top" }}
           >
             {entry.category}
           </span>
@@ -1264,6 +1313,9 @@ export default function HabitTracker() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDescription, setExpenseDescription] = useState("");
   const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [expenseQuality, setExpenseQuality] = useState("bad"); // "good" | "bad" — was this a good or bad expense?
+  const [otherExpenseLabel, setOtherExpenseLabel] = useState(""); // free-text label when category is "Other"
+  const [otherExpenseIcon, setOtherExpenseIcon] = useState(null); // chosen lucide icon name for that label
   const [currency, setCurrency] = useState(null); // "USD" | "INR" — null until the user picks one
   const [incomes, setIncomes] = useState([]);
   const [incomeAmount, setIncomeAmount] = useState("");
@@ -1381,11 +1433,23 @@ export default function HabitTracker() {
 
   // Default the "this week" strip's scroll position to today, so opening the
   // app lands on the current day instead of the far-left (earliest) end of
-  // its scrollable history.
+  // its scrollable history. Set scrollLeft on the strip directly rather than
+  // cell.scrollIntoView(): on mobile browsers, scrollIntoView on a nested
+  // scroll container can bubble up and shift the whole page's scroll/zoom
+  // before the viewport has settled on first paint, which is what was
+  // causing the page to look mis-fit until the next navigation forced a
+  // reflow. Setting scrollLeft touches only this one element.
   useEffect(() => {
-    if (!loading && todayDayCellRef.current) {
-      todayDayCellRef.current.scrollIntoView({ behavior: "auto", inline: "center", block: "nearest" });
-    }
+    if (loading) return;
+    const raf = requestAnimationFrame(() => {
+      const container = daysStripRef.current;
+      const cell = todayDayCellRef.current;
+      if (container && cell) {
+        const target = cell.offsetLeft - container.clientWidth / 2 + cell.clientWidth / 2;
+        container.scrollLeft = Math.max(0, target);
+      }
+    });
+    return () => cancelAnimationFrame(raf);
   }, [loading]);
 
   // Back-button handling: pressing back closes whatever's open on top
@@ -1718,17 +1782,23 @@ export default function HabitTracker() {
     const amount = parseFloat(expenseAmount);
     if (!amount || amount <= 0) return;
     playConfirmSound(getAudioContext());
+    const isOther = expenseCategory === "Other";
+    const customLabel = isOther ? otherExpenseLabel.trim() : "";
     const entry = {
       id: Date.now() + Math.random(),
       amount,
       description: expenseDescription.trim(),
-      category: expenseCategory,
+      category: customLabel || expenseCategory,
+      icon: isOther && otherExpenseIcon ? otherExpenseIcon : null,
+      quality: expenseQuality,
       date: today,
       time: Date.now(),
     };
     persistExpenses([entry, ...expenses]);
     setExpenseAmount("");
     setExpenseDescription("");
+    setOtherExpenseLabel("");
+    setOtherExpenseIcon(null);
   };
 
   const deleteExpense = (id) => {
@@ -4213,7 +4283,13 @@ export default function HabitTracker() {
                           return (
                             <button
                               key={cat}
-                              onClick={() => setExpenseCategory(cat)}
+                              onClick={() => {
+                                setExpenseCategory(cat);
+                                if (cat !== "Other") {
+                                  setOtherExpenseLabel("");
+                                  setOtherExpenseIcon(null);
+                                }
+                              }}
                               className="rounded-full pl-2.5 pr-3 py-1.5 text-xs flex items-center gap-1.5"
                               style={{
                                 background: active ? "#E5484D" : "#151513",
@@ -4228,6 +4304,96 @@ export default function HabitTracker() {
                             </button>
                           );
                         })}
+                      </div>
+                      {expenseCategory === "Other" && (
+                        <div className="rounded-lg p-3 mb-3.5" style={{ background: "#111110", border: "1px solid #242422" }}>
+                          <div className="text-xs mb-1.5" style={{ color: "#8A8A85" }}>
+                            What is it?
+                          </div>
+                          <input
+                            value={otherExpenseLabel}
+                            onChange={(e) => {
+                              setOtherExpenseLabel(e.target.value);
+                              setOtherExpenseIcon(null);
+                            }}
+                            placeholder="e.g. Pizza, Haircut, Parking..."
+                            className="w-full rounded-lg px-3 py-2 text-sm mb-2.5"
+                            style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
+                          />
+                          {otherExpenseLabel.trim() &&
+                            (() => {
+                              const suggestions = searchIcons(otherExpenseLabel, 24);
+                              if (suggestions.length === 0) {
+                                return (
+                                  <div className="text-xs" style={{ color: "#6E6E6A" }}>
+                                    No matching icons — try a different word.
+                                  </div>
+                                );
+                              }
+                              return (
+                                <>
+                                  <div className="text-xs mb-1.5" style={{ color: "#6E6E6A" }}>
+                                    Pick an icon
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5" style={{ maxHeight: "132px", overflowY: "auto" }}>
+                                    {suggestions.map(({ name, Icon: SuggestIcon }) => {
+                                      const active = otherExpenseIcon === name;
+                                      return (
+                                        <button
+                                          key={name}
+                                          onClick={() => setOtherExpenseIcon(name)}
+                                          aria-label={iconNameToLabel(name)}
+                                          className="rounded-lg flex items-center justify-center shrink-0"
+                                          style={{
+                                            width: "34px",
+                                            height: "34px",
+                                            background: active ? "#E5484D" : "#151513",
+                                            border: `1px solid ${active ? "#E5484D" : "#262622"}`,
+                                            color: active ? "#000000" : "#9A9A94",
+                                          }}
+                                        >
+                                          <SuggestIcon size={15} />
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
+                        </div>
+                      )}
+                      <div className="mb-3.5">
+                        <div className="text-xs mb-1.5" style={{ color: "#6E6E6A" }}>
+                          Was this a good or bad expense?
+                        </div>
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => setExpenseQuality("good")}
+                            className="flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5"
+                            style={{
+                              background: expenseQuality === "good" ? hexToRgba(ACCENT_GREEN, 0.16) : "#151513",
+                              border: `1px solid ${expenseQuality === "good" ? ACCENT_GREEN : "#262622"}`,
+                              color: expenseQuality === "good" ? ACCENT_GREEN : "#8A8A85",
+                              fontWeight: expenseQuality === "good" ? 700 : 500,
+                            }}
+                          >
+                            <ThumbsUp size={12} />
+                            Good
+                          </button>
+                          <button
+                            onClick={() => setExpenseQuality("bad")}
+                            className="flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5"
+                            style={{
+                              background: expenseQuality === "bad" ? hexToRgba("#E5484D", 0.16) : "#151513",
+                              border: `1px solid ${expenseQuality === "bad" ? "#E5484D" : "#262622"}`,
+                              color: expenseQuality === "bad" ? "#E5484D" : "#8A8A85",
+                              fontWeight: expenseQuality === "bad" ? 700 : 500,
+                            }}
+                          >
+                            <ThumbsDown size={12} />
+                            Bad
+                          </button>
+                        </div>
                       </div>
                       <button
                         onClick={addExpense}
@@ -4270,8 +4436,8 @@ export default function HabitTracker() {
                                   key={e.id}
                                   entry={e}
                                   currencySymbol={currencySymbol}
-                                  Icon={EXPENSE_CATEGORY_ICONS[e.category] || Sparkles}
-                                  accentColor="#E5484D"
+                                  Icon={(e.icon && LucideIcons[e.icon]) || EXPENSE_CATEGORY_ICONS[e.category] || Sparkles}
+                                  accentColor={e.quality === "good" ? ACCENT_GREEN : "#E5484D"}
                                   onDelete={() => deleteExpense(e.id)}
                                   deleteLabel="Delete expense"
                                 />
