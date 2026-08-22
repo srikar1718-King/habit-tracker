@@ -1216,7 +1216,7 @@ function buildFullMonthGrid(monthCursor) {
 // A single transaction line in the money calculator's list — a colored
 // left edge + icon badge signal expense vs. income at a glance, shared by
 // both the expense and income tabs so the two lists stay visually consistent.
-function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, deleteLabel }) {
+function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, deleteLabel, onEdit, editLabel }) {
   return (
     <div
       className="money-row rounded-xl flex items-center gap-3 p-3"
@@ -1258,14 +1258,26 @@ function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, del
           </div>
         )}
       </div>
-      <button
-        onClick={onDelete}
-        aria-label={deleteLabel}
-        className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
-        style={{ color: "#8A8A85" }}
-      >
-        <Trash2 size={15} />
-      </button>
+      <div className="shrink-0 flex items-center gap-1">
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            aria-label={editLabel}
+            className="w-8 h-8 rounded-full flex items-center justify-center"
+            style={{ color: "#8A8A85" }}
+          >
+            <Pencil size={14} />
+          </button>
+        )}
+        <button
+          onClick={onDelete}
+          aria-label={deleteLabel}
+          className="w-8 h-8 rounded-full flex items-center justify-center"
+          style={{ color: "#8A8A85" }}
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -1316,6 +1328,7 @@ export default function HabitTracker() {
   const [expenseQuality, setExpenseQuality] = useState("bad"); // "good" | "bad" — was this a good or bad expense?
   const [otherExpenseLabel, setOtherExpenseLabel] = useState(""); // free-text label when category is "Other"
   const [otherExpenseIcon, setOtherExpenseIcon] = useState(null); // chosen lucide icon name for that label
+  const [editingExpenseId, setEditingExpenseId] = useState(null); // id of the expense currently being edited, or null
   const [currency, setCurrency] = useState(null); // "USD" | "INR" — null until the user picks one
   const [incomes, setIncomes] = useState([]);
   const [incomeAmount, setIncomeAmount] = useState("");
@@ -1409,6 +1422,7 @@ export default function HabitTracker() {
   const allowExitRef = useRef(false);
   const daysStripRef = useRef(null);
   const todayDayCellRef = useRef(null);
+  const expenseFormRef = useRef(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
   function getAudioContext() {
@@ -1784,25 +1798,72 @@ export default function HabitTracker() {
     playConfirmSound(getAudioContext());
     const isOther = expenseCategory === "Other";
     const customLabel = isOther ? otherExpenseLabel.trim() : "";
-    const entry = {
-      id: Date.now() + Math.random(),
-      amount,
-      description: expenseDescription.trim(),
-      category: customLabel || expenseCategory,
-      icon: isOther && otherExpenseIcon ? otherExpenseIcon : null,
-      quality: expenseQuality,
-      date: today,
-      time: Date.now(),
-    };
-    persistExpenses([entry, ...expenses]);
+    const category = customLabel || expenseCategory;
+    const icon = isOther && otherExpenseIcon ? otherExpenseIcon : null;
+    const description = expenseDescription.trim();
+
+    if (editingExpenseId !== null) {
+      persistExpenses(
+        expenses.map((e) =>
+          e.id === editingExpenseId ? { ...e, amount, description, category, icon, quality: expenseQuality } : e
+        )
+      );
+      setEditingExpenseId(null);
+    } else {
+      const entry = {
+        id: Date.now() + Math.random(),
+        amount,
+        description,
+        category,
+        icon,
+        quality: expenseQuality,
+        date: today,
+        time: Date.now(),
+      };
+      persistExpenses([entry, ...expenses]);
+    }
     setExpenseAmount("");
     setExpenseDescription("");
     setOtherExpenseLabel("");
     setOtherExpenseIcon(null);
   };
 
+  // Populates the expense form with an existing entry's values so the user
+  // can change them, instead of only being able to delete and re-add.
+  const startEditExpense = (entry) => {
+    playClickSound(getAudioContext());
+    const isCustom = !EXPENSE_CATEGORIES.includes(entry.category);
+    setEditingExpenseId(entry.id);
+    setExpenseAmount(String(entry.amount));
+    setExpenseDescription(entry.description || "");
+    setExpenseQuality(entry.quality || "bad");
+    if (isCustom) {
+      setExpenseCategory("Other");
+      setOtherExpenseLabel(entry.category);
+      setOtherExpenseIcon(entry.icon || null);
+    } else {
+      setExpenseCategory(entry.category);
+      setOtherExpenseLabel("");
+      setOtherExpenseIcon(null);
+    }
+    if (expenseFormRef.current) {
+      expenseFormRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const cancelEditExpense = () => {
+    setEditingExpenseId(null);
+    setExpenseAmount("");
+    setExpenseDescription("");
+    setExpenseCategory(EXPENSE_CATEGORIES[0]);
+    setExpenseQuality("bad");
+    setOtherExpenseLabel("");
+    setOtherExpenseIcon(null);
+  };
+
   const deleteExpense = (id) => {
     playDeleteSound(getAudioContext());
+    if (editingExpenseId === id) cancelEditExpense();
     persistExpenses(expenses.filter((e) => e.id !== id));
   };
 
@@ -2878,8 +2939,32 @@ export default function HabitTracker() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
         .fraunces { font-family: 'Fraunces', serif; }
         .mono { font-family: 'IBM Plex Mono', monospace; }
-        .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; }
+        .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; position: relative; }
         .habit-card:active { transform: scale(0.99); }
+        @keyframes habitFlash {
+          0% { transform: translateX(-140%) skewX(-12deg); opacity: 0; }
+          8% { opacity: 0; }
+          15% { opacity: 0.55; }
+          26% { opacity: 0.08; }
+          32% { transform: translateX(260%) skewX(-12deg); opacity: 0; }
+          100% { transform: translateX(260%) skewX(-12deg); opacity: 0; }
+        }
+        .habit-flash {
+          position: absolute;
+          top: -35%;
+          left: 0;
+          width: 24%;
+          height: 170%;
+          pointer-events: none;
+          animation-name: habitFlash;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+        }
+        @keyframes ambientDrift {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          50% { transform: translate(3%, -4%) scale(1.06); }
+        }
+        .ambient-glow { pointer-events: none; animation: ambientDrift 14s ease-in-out infinite; }
         @keyframes deleteAway {
           0% { clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); opacity: 1; filter: blur(0px); }
           100% { clip-path: polygon(100% 0%, 100% 0%, 100% 0%, 100% 0%); opacity: 0; filter: blur(3px); }
@@ -3492,7 +3577,7 @@ export default function HabitTracker() {
 
         {/* Today / selected day */}
         <div
-          className="rounded-lg p-4 mb-6"
+          className="rounded-lg p-4 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3500,7 +3585,25 @@ export default function HabitTracker() {
             boxShadow: `inset 0 2px 0 0 ${pctColor(selectedPct)}, 0 10px 24px -18px rgba(0,0,0,0.9)`,
           }}
         >
-          <div className="flex items-center justify-between mb-1">
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}
+          >
+            <div
+              className="ambient-glow"
+              style={{
+                position: "absolute",
+                top: "-70px",
+                right: "-50px",
+                width: "180px",
+                height: "180px",
+                borderRadius: "999px",
+                background: hexToRgba(pctColor(selectedPct), 0.16),
+                filter: "blur(34px)",
+              }}
+            />
+          </div>
+          <div className="flex items-center justify-between mb-1" style={{ position: "relative" }}>
             <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
               {selectedDayLabel}
             </span>
@@ -3508,11 +3611,11 @@ export default function HabitTracker() {
               {selectedPct === null ? "—" : `${selectedPct}%`}
             </span>
           </div>
-          <div className="text-xs" style={{ color: "#8A8A85" }}>
+          <div className="text-xs" style={{ color: "#8A8A85", position: "relative" }}>
             {selectedDoneCount} of {selectedTotalCount} habit{selectedTotalCount === 1 ? "" : "s"} done
           </div>
 
-          <div className="flex flex-col gap-3 mt-4">
+          <div className="flex flex-col gap-3 mt-4" style={{ position: "relative" }}>
             {habits.length === 0 && (
               <div className="text-sm text-center py-4" style={{ color: "#6E6E6A" }}>
                 No habits yet. Tap + to add your first one.
@@ -3525,7 +3628,7 @@ export default function HabitTracker() {
               </div>
             )}
 
-            {visibleHabits.map((h) => {
+            {visibleHabits.map((h, hIdx) => {
               const done = !!selectedRecord[h.id];
               const HabitIcon = getIcon(h.icon);
               const isMilestoneHabit = h.frequency?.type === "milestone";
@@ -3556,6 +3659,19 @@ export default function HabitTracker() {
                   onPointerLeave={handleCardLeave}
                   onPointerCancel={handleCardLeave}
                 >
+                  <div
+                    aria-hidden="true"
+                    style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}
+                  >
+                    <div
+                      className="habit-flash"
+                      style={{
+                        background: `linear-gradient(100deg, transparent, ${hexToRgba(h.color, 0.6)}, transparent)`,
+                        animationDuration: `${5 + (hIdx % 4) * 0.8}s`,
+                        animationDelay: `${(hIdx % 6) * 0.85}s`,
+                      }}
+                    />
+                  </div>
                   <div className="shrink-0 flex flex-col items-center" style={{ width: "40px" }}>
                     <div
                       className="w-10 h-10 rounded-full flex items-center justify-center"
@@ -4247,9 +4363,29 @@ export default function HabitTracker() {
                     )}
 
                     <div
+                      ref={expenseFormRef}
                       className="rounded-xl p-4 mb-5"
-                      style={{ background: "#0D0D0D", border: "1px solid #242422", boxShadow: `inset 0 1px 0 0 ${hexToRgba("#E5484D", 0.3)}` }}
+                      style={{
+                        background: "#0D0D0D",
+                        border: `1px solid ${editingExpenseId !== null ? YELLOW : "#242422"}`,
+                        boxShadow: `inset 0 1px 0 0 ${hexToRgba(editingExpenseId !== null ? YELLOW : "#E5484D", 0.3)}`,
+                      }}
                     >
+                      {editingExpenseId !== null && (
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs flex items-center gap-1.5" style={{ color: YELLOW, fontWeight: 700 }}>
+                            <Pencil size={12} />
+                            Editing expense
+                          </span>
+                          <button
+                            onClick={cancelEditExpense}
+                            className="text-xs rounded-full px-2.5 py-1"
+                            style={{ background: "#151513", border: "1px solid #262622", color: "#8A8A85" }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                       <div className="flex gap-2 mb-3">
                         <div
                           className="flex items-center rounded-lg px-3"
@@ -4400,13 +4536,22 @@ export default function HabitTracker() {
                         disabled={!expenseAmount || parseFloat(expenseAmount) <= 0}
                         className="w-full rounded-lg py-2.5 flex items-center justify-center gap-2 text-sm"
                         style={{
-                          background: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#1C1C19" : "#E5484D",
+                          background: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#1C1C19" : editingExpenseId !== null ? YELLOW : "#E5484D",
                           color: !expenseAmount || parseFloat(expenseAmount) <= 0 ? "#4A4A47" : "#000000",
                           fontWeight: 700,
                         }}
                       >
-                        <Plus size={15} strokeWidth={2.5} />
-                        Add expense
+                        {editingExpenseId !== null ? (
+                          <>
+                            <Check size={15} strokeWidth={2.5} />
+                            Save changes
+                          </>
+                        ) : (
+                          <>
+                            <Plus size={15} strokeWidth={2.5} />
+                            Add expense
+                          </>
+                        )}
                       </button>
                     </div>
 
@@ -4440,6 +4585,8 @@ export default function HabitTracker() {
                                   accentColor={e.quality === "good" ? ACCENT_GREEN : "#E5484D"}
                                   onDelete={() => deleteExpense(e.id)}
                                   deleteLabel="Delete expense"
+                                  onEdit={() => startEditExpense(e)}
+                                  editLabel="Edit expense"
                                 />
                               ))}
                             </div>
