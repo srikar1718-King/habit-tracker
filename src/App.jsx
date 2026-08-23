@@ -664,7 +664,7 @@ function getScrollableDayRange(today, habits, records) {
   return days;
 }
 
-function DayRing({ pct, size = 40, strokeWidth = 3 }) {
+function DayRing({ pct, size = 40, strokeWidth = 3, color = YELLOW }) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const p = pct === null ? 0 : Math.max(0, Math.min(100, pct));
@@ -683,7 +683,7 @@ function DayRing({ pct, size = 40, strokeWidth = 3 }) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#F2C94C"
+          stroke={color}
           strokeWidth={strokeWidth}
           strokeDasharray={circumference}
           strokeDashoffset={offset}
@@ -694,23 +694,30 @@ function DayRing({ pct, size = 40, strokeWidth = 3 }) {
   );
 }
 
-function hexToRgba(hex, alpha) {
-  const clean = hex.replace("#", "");
+// Accepts either a "#rgb"/"#rrggbb" hex string or an "rgb(r,g,b)"/"rgba(r,g,b,a)"
+// string (e.g. pctColor()'s output) and returns {r,g,b}. Routing every color
+// helper below through this means passing pctColor() into any of them just
+// works, instead of silently parsing as black (parseInt on a leading "r"
+// from "rgb(...)" returns NaN, which bitwise-coerces to 0 for every channel).
+function parseColorToRgb(color) {
+  const str = String(color);
+  if (str.startsWith("rgb")) {
+    const parts = str.match(/[\d.]+/g) || [];
+    return { r: Number(parts[0]) || 0, g: Number(parts[1]) || 0, b: Number(parts[2]) || 0 };
+  }
+  const clean = str.replace("#", "");
   const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  const bigint = parseInt(full, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
+  const bigint = parseInt(full, 16) || 0;
+  return { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255 };
+}
+
+function hexToRgba(hex, alpha) {
+  const { r, g, b } = parseColorToRgb(hex);
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function lightenColor(hex, amount) {
-  const clean = hex.replace("#", "");
-  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  const bigint = parseInt(full, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
+  const { r, g, b } = parseColorToRgb(hex);
   const nr = Math.round(r + (255 - r) * amount);
   const ng = Math.round(g + (255 - g) * amount);
   const nb = Math.round(b + (255 - b) * amount);
@@ -718,12 +725,7 @@ function lightenColor(hex, amount) {
 }
 
 function darkenColor(hex, amount) {
-  const clean = hex.replace("#", "");
-  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  const bigint = parseInt(full, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
+  const { r, g, b } = parseColorToRgb(hex);
   const nr = Math.round(r * (1 - amount));
   const ng = Math.round(g * (1 - amount));
   const nb = Math.round(b * (1 - amount));
@@ -731,12 +733,10 @@ function darkenColor(hex, amount) {
 }
 
 function hexToHsl(hex) {
-  const clean = hex.replace("#", "");
-  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  const bigint = parseInt(full, 16);
-  const r = ((bigint >> 16) & 255) / 255;
-  const g = ((bigint >> 8) & 255) / 255;
-  const b = (bigint & 255) / 255;
+  const { r: r255, g: g255, b: b255 } = parseColorToRgb(hex);
+  const r = r255 / 255;
+  const g = g255 / 255;
+  const b = b255 / 255;
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   let h = 0;
@@ -1329,6 +1329,7 @@ export default function HabitTracker() {
   const [otherExpenseLabel, setOtherExpenseLabel] = useState(""); // free-text label when category is "Other"
   const [otherExpenseIcon, setOtherExpenseIcon] = useState(null); // chosen lucide icon name for that label
   const [editingExpenseId, setEditingExpenseId] = useState(null); // id of the expense currently being edited, or null
+  const [flashActive, setFlashActive] = useState(false); // gates the habit-card flash sweep so it starts cleanly
   const [currency, setCurrency] = useState(null); // "USD" | "INR" — null until the user picks one
   const [incomes, setIncomes] = useState([]);
   const [incomeAmount, setIncomeAmount] = useState("");
@@ -1464,6 +1465,28 @@ export default function HabitTracker() {
       }
     });
     return () => cancelAnimationFrame(raf);
+  }, [loading]);
+
+  // The habit-card flash sweep starts paused (see .habit-flash's
+  // animation-play-state in the stylesheet below) and only switches to
+  // running here, after a confirmed first paint. Some mobile browsers fail
+  // to start CSS animations that are already set to "running" on elements
+  // present at initial paint — the animation stays visually frozen at its
+  // first frame until something else forces a reflow (e.g. scrolling),
+  // which is exactly the "stuck until I scroll" symptom. Flipping the
+  // play-state on afterward, once layout has definitely settled, avoids
+  // that stall. The nested rAF (rather than a single one) waits a full
+  // extra frame to make sure that first paint has actually happened.
+  useEffect(() => {
+    if (loading) return;
+    let raf2;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setFlashActive(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
   }, [loading]);
 
   // Back-button handling: pressing back closes whatever's open on top
@@ -2942,24 +2965,27 @@ export default function HabitTracker() {
         .habit-card { transition: transform 0.1s ease; user-select: none; -webkit-user-select: none; cursor: pointer; position: relative; }
         .habit-card:active { transform: scale(0.99); }
         @keyframes habitFlash {
-          0% { transform: translateX(-140%) skewX(-12deg); opacity: 0; }
+          0% { transform: translateX(-160%) skewX(-10deg); opacity: 0; }
           8% { opacity: 0; }
-          15% { opacity: 0.55; }
-          26% { opacity: 0.08; }
-          32% { transform: translateX(260%) skewX(-12deg); opacity: 0; }
-          100% { transform: translateX(260%) skewX(-12deg); opacity: 0; }
+          20% { opacity: 1; }
+          32% { opacity: 0; }
+          38% { transform: translateX(260%) skewX(-10deg); opacity: 0; }
+          100% { transform: translateX(260%) skewX(-10deg); opacity: 0; }
         }
         .habit-flash {
           position: absolute;
-          top: -35%;
+          top: -40%;
           left: 0;
-          width: 24%;
-          height: 170%;
+          width: 42%;
+          height: 180%;
           pointer-events: none;
+          filter: blur(7px);
           animation-name: habitFlash;
           animation-timing-function: ease-in-out;
           animation-iteration-count: infinite;
+          animation-play-state: paused;
         }
+        .flash-on .habit-flash { animation-play-state: running; }
         @keyframes ambientDrift {
           0%, 100% { transform: translate(0, 0) scale(1); }
           50% { transform: translate(3%, -4%) scale(1.06); }
@@ -3308,10 +3334,24 @@ export default function HabitTracker() {
         </div>
       )}
 
-      <div className="app-content max-w-xl mx-auto px-5 py-10" style={{ paddingBottom: "110px" }}>
+      <div className={`app-content max-w-xl mx-auto px-5 py-10${flashActive ? " flash-on" : ""}`} style={{ paddingBottom: "110px" }}>
         {/* Header */}
-        <div className="flex items-baseline mb-1">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-baseline mb-1" style={{ position: "relative" }}>
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: "-30px",
+              left: "-20px",
+              width: "150px",
+              height: "150px",
+              borderRadius: "999px",
+              background: hexToRgba(ACCENT_GREEN, 0.1),
+              filter: "blur(40px)",
+              pointerEvents: "none",
+            }}
+          />
+          <div className="flex items-center gap-2.5" style={{ position: "relative" }}>
             <button
               onClick={() => {
                 playClickSound(getAudioContext());
@@ -3354,7 +3394,7 @@ export default function HabitTracker() {
           <span style={{ color: "#4A4A46", fontWeight: 500 }}>· swipe for past days</span>
         </div>
         <div
-          className="rounded-lg mb-8"
+          className="rounded-lg mb-8 relative"
           style={{
             padding: "14px 10px 10px",
             backgroundColor: "#0D0D0D",
@@ -3363,9 +3403,28 @@ export default function HabitTracker() {
           }}
         >
         <div
+          aria-hidden="true"
+          style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}
+        >
+          <div
+            className="ambient-glow"
+            style={{
+              position: "absolute",
+              top: "-50px",
+              right: "-30px",
+              width: "130px",
+              height: "130px",
+              borderRadius: "999px",
+              background: hexToRgba(pctColor(dayPct(selectedDate)), 0.12),
+              filter: "blur(30px)",
+            }}
+          />
+        </div>
+        <div
           ref={daysStripRef}
           className="hide-scrollbar"
           style={{
+            position: "relative",
             display: "flex",
             gap: "10px",
             overflowX: "auto",
@@ -3388,7 +3447,7 @@ export default function HabitTracker() {
                 className="flex flex-col items-center gap-1.5"
                 style={{
                   flex: "0 0 auto",
-                  width: "40px",
+                  width: "44px",
                   opacity: isFuture ? 0.4 : 1,
                   cursor: isFuture ? "default" : "pointer",
                   scrollSnapAlign: "center",
@@ -3404,14 +3463,18 @@ export default function HabitTracker() {
                   style={{
                     position: "relative",
                     width: "100%",
-                    maxWidth: "40px",
+                    maxWidth: "44px",
                     aspectRatio: "1 / 1",
                     margin: "0 auto",
                     borderRadius: "999px",
-                    boxShadow: isSelected ? `0 0 0 2px #000000, 0 0 0 4px ${YELLOW}` : "none",
+                    boxShadow: isSelected
+                      ? `0 0 0 2px #000000, 0 0 0 4px ${YELLOW}`
+                      : isToday
+                        ? `0 0 10px -2px ${hexToRgba(pctColor(pct), 0.6)}`
+                        : "none",
                   }}
                 >
-                  <DayRing pct={pct} size={40} strokeWidth={isToday ? 3.5 : 3} />
+                  <DayRing pct={pct} size={44} strokeWidth={isToday ? 4 : 3.2} color={pctColor(pct)} />
                   <div
                     style={{
                       position: "absolute",
@@ -3434,7 +3497,7 @@ export default function HabitTracker() {
 
         {/* Average completion */}
         <div
-          className="rounded-lg p-5 mb-6"
+          className="rounded-lg p-5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3442,60 +3505,76 @@ export default function HabitTracker() {
             boxShadow: `inset 0 2px 0 0 ${pctColor(avg)}, 0 10px 24px -18px rgba(0,0,0,0.9)`,
           }}
         >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs mono flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
-                <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: pctColor(avg), display: "inline-block" }} />
-                AVERAGE COMPLETION
-              </span>
-              <button
-                onClick={() => setShowTrendGraph(true)}
-                aria-label="View daily and weekly completion trend graph"
-                className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
-                style={{ background: "transparent", border: "1px solid #262622", color: "#8A8A85" }}
-              >
-                <BarChart3 size={12} />
-              </button>
-            </div>
-            <div className="flex gap-1">
-              {PERIODS.map((p) => (
-                <button
-                  key={p.key}
-                  onClick={() => setPeriod(p.key)}
-                  className="period-btn rounded-full px-2.5 py-1 text-xs"
-                  style={{
-                    background: period === p.key ? ACCENT_GREEN : "transparent",
-                    color: period === p.key ? "#000000" : "#9A9A94",
-                    border: `1px solid ${period === p.key ? ACCENT_GREEN : "#262622"}`,
-                    fontWeight: 500,
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}
+          >
+            <div
+              className="ambient-glow"
+              style={{
+                position: "absolute",
+                top: "-60px",
+                left: "-40px",
+                width: "160px",
+                height: "160px",
+                borderRadius: "999px",
+                background: hexToRgba(pctColor(avg), 0.14),
+                filter: "blur(32px)",
+              }}
+            />
           </div>
-          <div className="flex items-center gap-3">
-            <div style={{ flex: 1, height: "10px", borderRadius: "999px", background: "#161614", overflow: "hidden" }}>
+          <div style={{ position: "relative" }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs mono flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
+              <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: pctColor(avg), display: "inline-block" }} />
+              AVERAGE COMPLETION
+            </span>
+            <button
+              onClick={() => setShowTrendGraph(true)}
+              aria-label="View daily and weekly completion trend graph"
+              className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
+              style={{ background: hexToRgba(pctColor(avg), 0.12), border: `1px solid ${hexToRgba(pctColor(avg), 0.4)}`, color: pctColor(avg) }}
+            >
+              <BarChart3 size={12} />
+            </button>
+          </div>
+          <div className="flex gap-1.5 mb-4">
+            {PERIODS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setPeriod(p.key)}
+                className="period-btn flex-1 rounded-full px-2 py-1.5 text-xs"
+                style={{
+                  background: period === p.key ? ACCENT_GREEN : "transparent",
+                  color: period === p.key ? "#000000" : "#9A9A94",
+                  border: `1px solid ${period === p.key ? ACCENT_GREEN : "#262622"}`,
+                  fontWeight: 500,
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="mono" style={{ fontSize: "36px", fontWeight: 700, lineHeight: 1, color: pctColor(avg) }}>
+            {avg === null ? "—" : `${avg}%`}
+          </div>
+          <div style={{ marginTop: "14px" }}>
+            <div style={{ height: "8px", borderRadius: "999px", background: "#161614", overflow: "hidden" }}>
               <div
                 style={{
                   width: `${avg ?? 0}%`,
                   height: "100%",
                   borderRadius: "999px",
-                  background: pctColor(avg),
+                  background: `linear-gradient(90deg, ${lightenColor(pctColor(avg), 0.25)}, ${pctColor(avg)})`,
+                  boxShadow: avg ? `0 0 10px ${hexToRgba(pctColor(avg), 0.5)}` : "none",
                   transition: "width 0.3s ease, background 0.3s ease",
                 }}
               />
             </div>
-            <span
-              className="mono text-2xl"
-              style={{ color: pctColor(avg), fontWeight: 600, minWidth: "3.4em", textAlign: "right" }}
-            >
-              {avg === null ? "—" : `${avg}%`}
-            </span>
           </div>
           <div className="text-xs mt-2" style={{ color: "#8A8A85" }}>
             {avg === null ? "No tracked days in this window yet" : `avg over the last ${PERIODS.find((p) => p.key === period).days} day${PERIODS.find((p) => p.key === period).days === 1 ? "" : "s"}`}
+          </div>
           </div>
         </div>
 
@@ -3577,7 +3656,7 @@ export default function HabitTracker() {
 
         {/* Today / selected day */}
         <div
-          className="rounded-lg p-4 mb-6 relative"
+          className="rounded-lg p-5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3603,16 +3682,36 @@ export default function HabitTracker() {
               }}
             />
           </div>
-          <div className="flex items-center justify-between mb-1" style={{ position: "relative" }}>
+          <div className="flex items-center justify-between mb-3" style={{ position: "relative" }}>
             <span className="text-sm" style={{ color: "#EDEDEA", fontWeight: 600 }}>
               {selectedDayLabel}
             </span>
-            <span className="mono text-sm" style={{ color: "#8A8A85" }}>
-              {selectedPct === null ? "—" : `${selectedPct}%`}
+            <span
+              className="text-xs mono rounded-full px-2 py-0.5"
+              style={{ background: hexToRgba(pctColor(selectedPct), 0.14), color: pctColor(selectedPct), fontWeight: 700 }}
+            >
+              {selectedDoneCount} of {selectedTotalCount} done
             </span>
           </div>
-          <div className="text-xs" style={{ color: "#8A8A85", position: "relative" }}>
-            {selectedDoneCount} of {selectedTotalCount} habit{selectedTotalCount === 1 ? "" : "s"} done
+          <div
+            className="mono"
+            style={{ position: "relative", fontSize: "36px", fontWeight: 700, lineHeight: 1, color: pctColor(selectedPct) }}
+          >
+            {selectedPct === null ? "—" : `${selectedPct}%`}
+          </div>
+          <div style={{ position: "relative", marginTop: "14px" }}>
+            <div style={{ height: "8px", borderRadius: "999px", background: "#161614", overflow: "hidden" }}>
+              <div
+                style={{
+                  width: `${selectedPct ?? 0}%`,
+                  height: "100%",
+                  borderRadius: "999px",
+                  background: `linear-gradient(90deg, ${lightenColor(pctColor(selectedPct), 0.25)}, ${pctColor(selectedPct)})`,
+                  boxShadow: selectedPct ? `0 0 8px ${hexToRgba(pctColor(selectedPct), 0.5)}` : "none",
+                  transition: "width 0.3s ease, background 0.3s ease",
+                }}
+              />
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 mt-4" style={{ position: "relative" }}>
@@ -3639,19 +3738,21 @@ export default function HabitTracker() {
                   ref={(el) => {
                     if (el) cardRefs.current[h.id] = el;
                   }}
-                  className={`habit-card rounded-lg p-3 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
+                  className={`habit-card rounded-xl p-3.5 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
                   style={{
                     backgroundColor: "#141412",
-                    backgroundImage: "linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)",
+                    backgroundImage: `radial-gradient(130% 100% at 0% 0%, ${hexToRgba(h.color, done ? 0.16 : 0.09)} 0%, transparent 58%), linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)`,
                     borderTop: "1px solid #242422",
                     borderRight: "1px solid #242422",
                     borderBottom: "1px solid #242422",
                     borderLeft: `3px solid ${isOffSchedule ? hexToRgba(h.color, 0.4) : h.color}`,
                     boxShadow: isOffSchedule
                       ? "0 1px 0 rgba(255,255,255,0.02) inset, 0 4px 10px -10px rgba(0,0,0,0.6)"
-                      : "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8)",
+                      : done
+                        ? `0 1px 0 rgba(255,255,255,0.05) inset, 0 10px 22px -14px rgba(0,0,0,0.85), 0 0 0 1px ${hexToRgba(h.color, 0.3)}, 0 0 22px -6px ${hexToRgba(h.color, 0.45)}`
+                        : `0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 18px -14px rgba(0,0,0,0.8)`,
                     opacity: isOffSchedule ? 0.52 : 1,
-                    transition: "transform 0.1s ease, opacity 0.25s ease, box-shadow 0.25s ease",
+                    transition: "transform 0.1s ease, opacity 0.25s ease, box-shadow 0.25s ease, background-image 0.25s ease",
                     "--card-glow": hexToRgba(h.color, 0.6),
                   }}
                   onPointerDown={handleCardDown}
@@ -3666,23 +3767,23 @@ export default function HabitTracker() {
                     <div
                       className="habit-flash"
                       style={{
-                        background: `linear-gradient(100deg, transparent, ${hexToRgba(h.color, 0.6)}, transparent)`,
+                        background: `linear-gradient(100deg, transparent 0%, ${hexToRgba(h.color, 0.12)} 30%, ${hexToRgba(h.color, 0.4)} 50%, ${hexToRgba(h.color, 0.12)} 70%, transparent 100%)`,
                         animationDuration: `${5 + (hIdx % 4) * 0.8}s`,
                         animationDelay: `${(hIdx % 6) * 0.85}s`,
                       }}
                     />
                   </div>
-                  <div className="shrink-0 flex flex-col items-center" style={{ width: "40px" }}>
+                  <div className="shrink-0 flex flex-col items-center" style={{ width: "44px" }}>
                     <div
-                      className="w-10 h-10 rounded-full flex items-center justify-center"
+                      className="w-11 h-11 rounded-full flex items-center justify-center"
                       style={{
                         position: "relative",
                         backgroundColor: hexToRgba(h.color, 0.14),
-                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.4)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
-                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset`,
+                        backgroundImage: `radial-gradient(circle at 34% 28%, ${hexToRgba(h.color, 0.42)} 0%, ${hexToRgba(h.color, 0.1)} 72%)`,
+                        boxShadow: `0 0 0 1px ${hexToRgba(h.color, 0.3)} inset, 0 0 14px -4px ${hexToRgba(h.color, done ? 0.75 : 0.4)}`,
                       }}
                     >
-                      <HabitIcon size={19} color={h.color} />
+                      <HabitIcon size={20} color={h.color} />
                     </div>
                     {!isMilestoneHabit && (
                       <div
@@ -3810,15 +3911,15 @@ export default function HabitTracker() {
                                   const origin = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
                                   toggle(h, origin);
                                 }}
-                                className={`tick-btn shrink-0 w-8 h-8 rounded-full flex items-center justify-center border-2 ${animatingId === h.id ? "tick-glow" : ""}`}
+                                className={`tick-btn shrink-0 w-9 h-9 rounded-full flex items-center justify-center border-2 ${animatingId === h.id ? "tick-glow" : ""}`}
                                 style={{
                                   position: "relative",
                                   backgroundColor: done ? h.color : "transparent",
                                   backgroundImage: done
                                     ? `linear-gradient(150deg, ${lightenColor(h.color, 0.4)} 0%, ${h.color} 65%)`
-                                    : "none",
+                                    : `radial-gradient(circle at 32% 26%, rgba(255,255,255,0.06) 0%, transparent 60%)`,
                                   borderColor: done ? h.color : "#4A4A45",
-                                  boxShadow: done ? `0 2px 10px ${hexToRgba(h.color, 0.5)}` : "none",
+                                  boxShadow: done ? `0 2px 12px ${hexToRgba(h.color, 0.55)}` : "none",
                                   overflow: "visible",
                                   "--glow-color": h.color,
                                 }}
@@ -3829,7 +3930,7 @@ export default function HabitTracker() {
                                     <span className="done-ring" style={{ borderColor: h.color, animationDelay: "0.12s" }} />
                                   </>
                                 )}
-                                {done && <Check size={16} color="#000000" strokeWidth={3} className={animatingId === h.id ? "check-pop" : ""} />}
+                                {done && <Check size={17} color="#000000" strokeWidth={3} className={animatingId === h.id ? "check-pop" : ""} />}
                               </button>
                               {h.quantityTracking?.enabled && (
                                 <button
@@ -4138,16 +4239,19 @@ export default function HabitTracker() {
                       pointerEvents: "none",
                     }}
                   />
-                  <div className="flex items-center justify-between mb-1.5" style={{ position: "relative" }}>
+                  <div style={{ position: "relative" }}>
                     <span className="text-xs mono" style={{ color: "#8A8A85", letterSpacing: "0.06em" }}>
                       NET BALANCE
                     </span>
+                  </div>
+                  <div style={{ position: "relative", marginTop: "6px" }}>
                     <span
-                      className="text-xs rounded-full px-2 py-0.5 mono"
+                      className="text-xs rounded-full px-2 py-0.5 mono inline-block"
                       style={{
                         background: hexToRgba(monthNet >= 0 ? ACCENT_GREEN : "#E5484D", 0.14),
                         color: monthNet >= 0 ? ACCENT_GREEN : "#E5484D",
                         fontWeight: 700,
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {monthNet < 0 ? "-" : "+"}
@@ -4159,6 +4263,7 @@ export default function HabitTracker() {
                     className="mono"
                     style={{
                       position: "relative",
+                      marginTop: "10px",
                       color: netBalance >= 0 ? "#EDEDEA" : "#E5484D",
                       fontWeight: 700,
                       fontSize: "38px",
@@ -4176,10 +4281,10 @@ export default function HabitTracker() {
                       <div style={{ width: `${incomeShare}%`, background: ACCENT_GREEN, transition: "width 0.4s ease" }} />
                       <div style={{ width: `${expenseShare}%`, background: "#E5484D", transition: "width 0.4s ease" }} />
                     </div>
-                    <div className="flex items-center justify-between mt-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <ArrowUpRight size={12} color={ACCENT_GREEN} />
-                        <span className="text-xs" style={{ color: "#8A8A85" }}>
+                    <div className="flex flex-col gap-1.5 mt-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-xs" style={{ color: "#8A8A85" }}>
+                          <ArrowUpRight size={12} color={ACCENT_GREEN} />
                           Income
                         </span>
                         <span className="mono text-xs" style={{ color: ACCENT_GREEN, fontWeight: 700 }}>
@@ -4187,15 +4292,15 @@ export default function HabitTracker() {
                           {totalIncome.toFixed(2)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-xs" style={{ color: "#8A8A85" }}>
+                          <ArrowDownRight size={12} color="#E5484D" />
+                          Expense
+                        </span>
                         <span className="mono text-xs" style={{ color: "#E5484D", fontWeight: 700 }}>
                           {currencySymbol}
                           {totalExpense.toFixed(2)}
                         </span>
-                        <span className="text-xs" style={{ color: "#8A8A85" }}>
-                          Expense
-                        </span>
-                        <ArrowDownRight size={12} color="#E5484D" />
                       </div>
                     </div>
                   </div>
