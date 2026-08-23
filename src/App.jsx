@@ -3334,7 +3334,7 @@ export default function HabitTracker() {
         </div>
       )}
 
-      <div className={`app-content max-w-xl mx-auto px-5 py-10${flashActive ? " flash-on" : ""}`} style={{ paddingBottom: "110px" }}>
+      <div className={`app-content max-w-xl mx-auto px-3.5 py-10${flashActive ? " flash-on" : ""}`} style={{ paddingBottom: "110px" }}>
         {/* Header */}
         <div className="flex items-baseline mb-1" style={{ position: "relative" }}>
           <div
@@ -3497,7 +3497,7 @@ export default function HabitTracker() {
 
         {/* Average completion */}
         <div
-          className="rounded-lg p-5 mb-6 relative"
+          className="rounded-lg px-4 py-5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3656,7 +3656,7 @@ export default function HabitTracker() {
 
         {/* Today / selected day */}
         <div
-          className="rounded-lg p-5 mb-6 relative"
+          className="rounded-lg px-4 py-5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
