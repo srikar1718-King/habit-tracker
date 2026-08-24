@@ -292,11 +292,20 @@ const INCOME_CATEGORY_ICONS = {
   Other: Sparkles,
 };
 
-// A searchable index of every icon lucide-react exports (1000+, well past
-// the 500 minimum), used to suggest icons for a custom "Other" expense
-// based on whatever the user types. Built once at module load, not per
-// render — filtering/searching ~1000 plain objects on each keystroke is
-// still trivial, so no debouncing is needed.
+// A searchable index of every icon lucide-react exports, used to suggest
+// icons for a custom "Other" expense based on whatever the user types.
+// Built once at module load, not per render.
+//
+// lucide-react re-exports many icons under more than one name (most icons
+// have a matching "...Icon"-suffixed alias, and a few have older/renamed
+// aliases) — those aliases point to the exact same component. Indexing by
+// name alone means one visual icon could turn up several times in a single
+// search whenever more than one of its aliases matches the query. This
+// index is deduplicated by the actual component reference, keeping only
+// the shortest (cleanest) name per unique icon, so every entry — and every
+// search result drawn from it — is a genuinely different icon. Even after
+// dedup this comfortably covers 1000+ distinct icons spanning food, sport,
+// travel, home, work, finance, nature, tech, and more.
 const ICON_EXPORT_EXCLUDE = new Set(["createLucideIcon", "icons", "Icon", "LucideIcon", "default"]);
 function isLikelyIconExport(name, value) {
   if (ICON_EXPORT_EXCLUDE.has(name)) return false;
@@ -309,13 +318,28 @@ function iconNameToLabel(name) {
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .toLowerCase();
 }
-const ICON_SEARCH_INDEX = Object.keys(LucideIcons)
-  .filter((name) => isLikelyIconExport(name, LucideIcons[name]))
-  .map((name) => ({ name, label: iconNameToLabel(name), Icon: LucideIcons[name] }));
+const ICON_SEARCH_INDEX = (() => {
+  const canonicalNameByComponent = new Map(); // component -> shortest name seen for it
+  for (const name of Object.keys(LucideIcons)) {
+    const value = LucideIcons[name];
+    if (!isLikelyIconExport(name, value)) continue;
+    const existing = canonicalNameByComponent.get(value);
+    if (!existing || name.length < existing.length) {
+      canonicalNameByComponent.set(value, name);
+    }
+  }
+  return Array.from(canonicalNameByComponent.entries()).map(([Icon, name]) => ({
+    name,
+    label: iconNameToLabel(name),
+    Icon,
+  }));
+})();
 
 // Ranks icons by how well their (space-separated) name matches the query:
 // exact word > starts-with > substring, each icon capped at its best score.
-function searchIcons(query, limit = 24) {
+// Because ICON_SEARCH_INDEX has exactly one entry per unique icon, results
+// here can never contain the same icon twice.
+function searchIcons(query, limit = 30) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const words = q.split(/\s+/).filter(Boolean);
@@ -1219,7 +1243,7 @@ function buildFullMonthGrid(monthCursor) {
 function MoneyEntryRow({ entry, currencySymbol, Icon, accentColor, onDelete, deleteLabel, onEdit, editLabel }) {
   return (
     <div
-      className="money-row rounded-xl flex items-center gap-3 p-3"
+      className="money-row rounded-xl flex items-center gap-3 px-2.5 py-3"
       style={{
         background: "#111110",
         border: "1px solid #242422",
@@ -3714,7 +3738,7 @@ export default function HabitTracker() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 mt-4" style={{ position: "relative" }}>
+          <div className="flex flex-col items-center gap-3 mt-4" style={{ position: "relative" }}>
             {habits.length === 0 && (
               <div className="text-sm text-center py-4" style={{ color: "#6E6E6A" }}>
                 No habits yet. Tap + to add your first one.
@@ -3738,8 +3762,9 @@ export default function HabitTracker() {
                   ref={(el) => {
                     if (el) cardRefs.current[h.id] = el;
                   }}
-                  className={`habit-card rounded-xl p-3.5 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
+                  className={`habit-card rounded-xl px-3.5 py-2.5 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
                   style={{
+                    width: "99%",
                     backgroundColor: "#141412",
                     backgroundImage: `radial-gradient(130% 100% at 0% 0%, ${hexToRgba(h.color, done ? 0.16 : 0.09)} 0%, transparent 58%), linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)`,
                     borderTop: "1px solid #242422",
@@ -4122,7 +4147,7 @@ export default function HabitTracker() {
                     CALCULATOR
                   </div>
                   <div
-                    className="rounded-2xl p-7 text-center relative overflow-hidden"
+                    className="rounded-2xl px-6 py-7 text-center relative overflow-hidden"
                     style={{
                       background: "linear-gradient(160deg, #14140F 0%, #0A0A08 70%)",
                       border: "1px solid #262622",
@@ -4217,7 +4242,7 @@ export default function HabitTracker() {
 
                 {/* Balance hero — a ledger scale showing income vs. expense, not just a number */}
                 <div
-                  className="rounded-2xl p-5 mb-5 relative overflow-hidden"
+                  className="rounded-2xl px-4 py-5 mb-5 relative overflow-hidden"
                   style={{
                     background: "linear-gradient(160deg, #14140F 0%, #0A0A08 65%)",
                     border: "1px solid #242422",
@@ -4354,7 +4379,7 @@ export default function HabitTracker() {
                   <>
                     {todayBudget === undefined ? (
                       showBudgetInput ? (
-                        <div className="rounded-xl p-4 mb-4" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
+                        <div className="rounded-xl px-3.5 py-4 mb-4" style={{ background: "#0D0D0D", border: "1px solid #242422" }}>
                           <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
                             <Wallet size={13} />
                             What's your budget for today?
@@ -4405,7 +4430,7 @@ export default function HabitTracker() {
                       ) : (
                         <button
                           onClick={() => setShowBudgetInput(true)}
-                          className="w-full rounded-xl p-4 mb-4 flex items-center justify-between"
+                          className="w-full rounded-xl px-3.5 py-4 mb-4 flex items-center justify-between"
                           style={{ background: "#0D0D0D", border: `1px dashed ${hexToRgba(YELLOW, 0.4)}` }}
                         >
                           <span className="text-sm flex items-center gap-2" style={{ color: "#8A8A85" }}>
@@ -4419,7 +4444,7 @@ export default function HabitTracker() {
                       )
                     ) : (
                       <div
-                        className="rounded-xl p-4 mb-4"
+                        className="rounded-xl px-3.5 py-4 mb-4"
                         style={{
                           background: "#0D0D0D",
                           border: `1px solid ${budgetRemaining < 0 ? "#E5484D" : "#242422"}`,
@@ -4469,7 +4494,7 @@ export default function HabitTracker() {
 
                     <div
                       ref={expenseFormRef}
-                      className="rounded-xl p-4 mb-5"
+                      className="rounded-xl px-3.5 py-4 mb-5"
                       style={{
                         background: "#0D0D0D",
                         border: `1px solid ${editingExpenseId !== null ? YELLOW : "#242422"}`,
@@ -4547,7 +4572,7 @@ export default function HabitTracker() {
                         })}
                       </div>
                       {expenseCategory === "Other" && (
-                        <div className="rounded-lg p-3 mb-3.5" style={{ background: "#111110", border: "1px solid #242422" }}>
+                        <div className="rounded-lg px-2.5 py-3 mb-3.5" style={{ background: "#111110", border: "1px solid #242422" }}>
                           <div className="text-xs mb-1.5" style={{ color: "#8A8A85" }}>
                             What is it?
                           </div>
@@ -4703,7 +4728,7 @@ export default function HabitTracker() {
                 ) : (
                   <>
                     <div
-                      className="rounded-xl p-4 mb-5"
+                      className="rounded-xl px-3.5 py-4 mb-5"
                       style={{ background: "#0D0D0D", border: "1px solid #242422", boxShadow: `inset 0 1px 0 0 ${hexToRgba(ACCENT_GREEN, 0.3)}` }}
                     >
                       <div className="flex gap-2 mb-3">
