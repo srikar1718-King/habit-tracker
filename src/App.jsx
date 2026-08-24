@@ -3680,7 +3680,7 @@ export default function HabitTracker() {
 
         {/* Today / selected day */}
         <div
-          className="rounded-lg px-4 py-5 mb-6 relative"
+          className="rounded-lg px-2.5 py-5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3762,9 +3762,9 @@ export default function HabitTracker() {
                   ref={(el) => {
                     if (el) cardRefs.current[h.id] = el;
                   }}
-                  className={`habit-card rounded-xl px-3.5 py-2.5 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
+                  className={`habit-card rounded-xl px-3.5 py-2 flex gap-3 ${deletingId === h.id ? "deleting" : ""} ${animatingId === h.id ? "card-complete-pop" : ""}`}
                   style={{
-                    width: "99%",
+                    width: "100%",
                     backgroundColor: "#141412",
                     backgroundImage: `radial-gradient(130% 100% at 0% 0%, ${hexToRgba(h.color, done ? 0.16 : 0.09)} 0%, transparent 58%), linear-gradient(150deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 45%)`,
                     borderTop: "1px solid #242422",
@@ -4001,11 +4001,11 @@ export default function HabitTracker() {
 
                     {!isMilestoneHabit && (
                       <>
-                        <div className="mt-2">
+                        <div className="mt-1.5">
                           <StarDisplay value={h.difficulty} />
                         </div>
-                        <div className="mt-3">
-                          <Heatmap habit={h} weeks={WEEKS_COMPACT} today={today} records={records} cellWidth={9} cellHeight={7} gap={2} />
+                        <div className="mt-2">
+                          <Heatmap habit={h} weeks={WEEKS_COMPACT} today={today} records={records} cellWidth={9} cellHeight={5} gap={1.5} />
                         </div>
                       </>
                     )}
