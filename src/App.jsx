@@ -1352,6 +1352,7 @@ export default function HabitTracker() {
   const [expenseQuality, setExpenseQuality] = useState("bad"); // "good" | "bad" — was this a good or bad expense?
   const [otherExpenseLabel, setOtherExpenseLabel] = useState(""); // free-text label when category is "Other"
   const [otherExpenseIcon, setOtherExpenseIcon] = useState(null); // chosen lucide icon name for that label
+  const [expenseDate, setExpenseDate] = useState(today); // date string this expense is logged against — today or yesterday
   const [editingExpenseId, setEditingExpenseId] = useState(null); // id of the expense currently being edited, or null
   const [flashActive, setFlashActive] = useState(false); // gates the habit-card flash sweep so it starts cleanly
   const [currency, setCurrency] = useState(null); // "USD" | "INR" — null until the user picks one
@@ -1852,7 +1853,7 @@ export default function HabitTracker() {
     if (editingExpenseId !== null) {
       persistExpenses(
         expenses.map((e) =>
-          e.id === editingExpenseId ? { ...e, amount, description, category, icon, quality: expenseQuality } : e
+          e.id === editingExpenseId ? { ...e, amount, description, category, icon, quality: expenseQuality, date: expenseDate } : e
         )
       );
       setEditingExpenseId(null);
@@ -1864,7 +1865,7 @@ export default function HabitTracker() {
         category,
         icon,
         quality: expenseQuality,
-        date: today,
+        date: expenseDate,
         time: Date.now(),
       };
       persistExpenses([entry, ...expenses]);
@@ -1873,6 +1874,7 @@ export default function HabitTracker() {
     setExpenseDescription("");
     setOtherExpenseLabel("");
     setOtherExpenseIcon(null);
+    setExpenseDate(today);
   };
 
   // Populates the expense form with an existing entry's values so the user
@@ -1884,6 +1886,7 @@ export default function HabitTracker() {
     setExpenseAmount(String(entry.amount));
     setExpenseDescription(entry.description || "");
     setExpenseQuality(entry.quality || "bad");
+    setExpenseDate(entry.date || today);
     if (isCustom) {
       setExpenseCategory("Other");
       setOtherExpenseLabel(entry.category);
@@ -1906,6 +1909,7 @@ export default function HabitTracker() {
     setExpenseQuality("bad");
     setOtherExpenseLabel("");
     setOtherExpenseIcon(null);
+    setExpenseDate(today);
   };
 
   const deleteExpense = (id) => {
@@ -3521,7 +3525,7 @@ export default function HabitTracker() {
 
         {/* Average completion */}
         <div
-          className="rounded-lg px-4 py-5 mb-6 relative"
+          className="rounded-lg px-4 py-3.5 mb-6 relative"
           style={{
             backgroundColor: "#0D0D0D",
             backgroundImage: "linear-gradient(160deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 40%)",
@@ -3548,7 +3552,7 @@ export default function HabitTracker() {
             />
           </div>
           <div style={{ position: "relative" }}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <span className="text-xs mono flex items-center gap-1.5" style={{ color: "#8A8A85" }}>
               <span style={{ width: "5px", height: "5px", borderRadius: "999px", background: pctColor(avg), display: "inline-block" }} />
               AVERAGE COMPLETION
@@ -3562,12 +3566,12 @@ export default function HabitTracker() {
               <BarChart3 size={12} />
             </button>
           </div>
-          <div className="flex gap-1.5 mb-4">
+          <div className="flex gap-1.5 mb-3">
             {PERIODS.map((p) => (
               <button
                 key={p.key}
                 onClick={() => setPeriod(p.key)}
-                className="period-btn flex-1 rounded-full px-2 py-1.5 text-xs"
+                className="period-btn flex-1 rounded-full px-2 py-1 text-xs"
                 style={{
                   background: period === p.key ? ACCENT_GREEN : "transparent",
                   color: period === p.key ? "#000000" : "#9A9A94",
@@ -3582,7 +3586,7 @@ export default function HabitTracker() {
           <div className="mono" style={{ fontSize: "36px", fontWeight: 700, lineHeight: 1, color: pctColor(avg) }}>
             {avg === null ? "—" : `${avg}%`}
           </div>
-          <div style={{ marginTop: "14px" }}>
+          <div style={{ marginTop: "10px" }}>
             <div style={{ height: "8px", borderRadius: "999px", background: "#161614", overflow: "hidden" }}>
               <div
                 style={{
@@ -3596,7 +3600,7 @@ export default function HabitTracker() {
               />
             </div>
           </div>
-          <div className="text-xs mt-2" style={{ color: "#8A8A85" }}>
+          <div className="text-xs mt-1.5" style={{ color: "#8A8A85" }}>
             {avg === null ? "No tracked days in this window yet" : `avg over the last ${PERIODS.find((p) => p.key === period).days} day${PERIODS.find((p) => p.key === period).days === 1 ? "" : "s"}`}
           </div>
           </div>
@@ -4541,6 +4545,38 @@ export default function HabitTracker() {
                           className="flex-1 rounded-lg px-3 py-2.5 text-sm min-w-0"
                           style={{ background: "#151513", border: "1px solid #262622", color: "#EDEDEA" }}
                         />
+                      </div>
+                      <div className="mb-3.5">
+                        <div className="text-xs mb-1.5 flex items-center gap-1.5" style={{ color: "#6E6E6A" }}>
+                          <Calendar size={11} />
+                          When was this?
+                        </div>
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => setExpenseDate(today)}
+                            className="flex-1 rounded-lg py-2 text-xs"
+                            style={{
+                              background: expenseDate === today ? hexToRgba("#E5484D", 0.16) : "#151513",
+                              border: `1px solid ${expenseDate === today ? "#E5484D" : "#262622"}`,
+                              color: expenseDate === today ? "#E5484D" : "#8A8A85",
+                              fontWeight: expenseDate === today ? 700 : 500,
+                            }}
+                          >
+                            Today
+                          </button>
+                          <button
+                            onClick={() => setExpenseDate(getYesterday(today))}
+                            className="flex-1 rounded-lg py-2 text-xs"
+                            style={{
+                              background: expenseDate === getYesterday(today) ? hexToRgba("#E5484D", 0.16) : "#151513",
+                              border: `1px solid ${expenseDate === getYesterday(today) ? "#E5484D" : "#262622"}`,
+                              color: expenseDate === getYesterday(today) ? "#E5484D" : "#8A8A85",
+                              fontWeight: expenseDate === getYesterday(today) ? 700 : 500,
+                            }}
+                          >
+                            Yesterday
+                          </button>
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-1.5 mb-3.5">
                         {EXPENSE_CATEGORIES.map((cat) => {
